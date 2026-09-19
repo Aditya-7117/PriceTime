@@ -1,4 +1,4 @@
-# pricetime
+# PriceTime
 
 A limit order book and matching engine: the program at the centre of an exchange. It holds every
 resting buy and sell order and executes trades the moment the two sides cross, under price-time
@@ -87,7 +87,7 @@ every command of every generated command sequence:
 The generator follows the order IDs it has issued, so cancels and modifies mostly hit live orders.
 To check that the tests can fail, twelve deliberate bugs were planted in the engine one at a time;
 the property suite caught every one. Details are in
-[decision 12](docs/decisions/0012-property-test-design.md).
+[decision 8](docs/decisions/0008-property-test-design.md).
 
 ## Quick start
 
@@ -153,4 +153,4 @@ options, what was chosen and what it costs.
 
 ## Licence
 
-Not chosen yet.
+[MIT](LICENSE).

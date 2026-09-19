@@ -1,6 +1,6 @@
-# 11. The journal is a write-ahead log of commands
+# 7. The journal is a write-ahead log of commands
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 
@@ -30,4 +30,10 @@ Two questions: what goes in the log, and does it get written before or after the
 - A torn final record currently stops recovery with an error, and a person has to truncate it.
   Dropping it automatically is safe under write-ahead ordering, but it is a policy call, so it was
   left out for now.
-- The on-disk format and the fsync policy are provisional. Both are open questions.
+- The format is JSON Lines: readable with any text tool, at some cost in size and speed. The
+  version header lets a binary format arrive later without breaking old journals, if the benchmark
+  shows the journal dominating latency.
+- Durability today: every command is flushed to the operating system, and the file is fsynced on
+  close. That survives a crash of the process, not a power cut. When the FIX layer starts sending
+  acknowledgements, it adds group commit: an fsync every N commands or T milliseconds, with each
+  acknowledgement held back until the fsync covering it completes.

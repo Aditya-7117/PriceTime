@@ -1,6 +1,6 @@
-# 9. Modify takes a new total quantity, as FIX does, and keeps priority only when shrinking
+# 5. Modify takes a new total quantity, as FIX does, and keeps priority only when shrinking
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 

@@ -1,6 +1,6 @@
-# 10. Rejections are events; exceptions are for bugs and I/O
+# 6. Rejections are events; exceptions are for bugs and I/O
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 

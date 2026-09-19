@@ -1,6 +1,6 @@
-# 8. Market orders cancel whatever they cannot fill
+# 4. Market orders cancel whatever they cannot fill
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 

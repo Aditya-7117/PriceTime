@@ -1,6 +1,6 @@
-# 12. How the property tests are built
+# 8. How the property tests are built
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 

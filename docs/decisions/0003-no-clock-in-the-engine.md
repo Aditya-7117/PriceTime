@@ -1,6 +1,6 @@
-# 7. No clock in the engine: time priority is command order
+# 3. No clock in the engine: time priority is command order
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 

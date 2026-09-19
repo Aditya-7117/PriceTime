@@ -1,6 +1,6 @@
-# 6. Commands in, events out, one command at a time
+# 2. Commands in, events out, one command at a time
 
-Date: 19 September 2026. Status: proposed.
+Date: 19 September 2026. Status: accepted.
 
 ## Context
 
