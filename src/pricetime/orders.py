@@ -49,8 +49,3 @@ class Order:
     filled: int = 0
     prev: Order | None = field(default=None, repr=False)
     next: Order | None = field(default=None, repr=False)
-
-    @property
-    def quantity(self) -> int:
-        """Total order quantity: what has filled plus what is still open."""
-        return self.filled + self.remaining

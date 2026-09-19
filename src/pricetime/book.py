@@ -26,9 +26,6 @@ class BookSide:
         self._keys: list[int] = []
         self._levels: dict[int, PriceLevel] = {}
 
-    def __len__(self) -> int:
-        return len(self._keys)
-
     def __iter__(self) -> Iterator[PriceLevel]:
         """Yield levels from the best price to the worst."""
         for key in reversed(self._keys):
