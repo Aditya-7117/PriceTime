@@ -49,6 +49,11 @@ class MatchingEngine:
         self._last_trade_price = rules.opening_price
 
     @property
+    def sequence(self) -> int:
+        """How many commands this engine has processed."""
+        return self._sequence
+
+    @property
     def book(self) -> OrderBook:
         """The live book, for inspection. The engine owns it; callers must not mutate it."""
         return self._book

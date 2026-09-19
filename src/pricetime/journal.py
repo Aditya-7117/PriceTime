@@ -11,7 +11,7 @@ The line format lives in `pricetime.codec`. This module owns the file.
 
 import logging
 import os
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
@@ -181,10 +181,29 @@ class JournaledEngine:
     is not applied, so the engine is never ahead of its journal.
     """
 
-    def __init__(self, path: Path, rules: MarketRules) -> None:
+    def __init__(
+        self,
+        path: Path,
+        rules: MarketRules,
+        *,
+        on_recovered: Callable[[JournalRecord, list[Event]], None] | None = None,
+    ) -> None:
+        """Open a journal, replaying whatever it already holds.
+
+        Args:
+            path: The journal file, created if it does not exist.
+            rules: The market rules this engine runs under. They must match the
+                rules the journal was written with.
+            on_recovered: Called with every record replayed and the events it
+                caused, so a caller can rebuild its own state alongside the book.
+        """
         self._writer = JournalWriter(path, rules)
-        self._engine = replay(path)
-        recovered = self._engine.snapshot().sequence
+        self._engine = MatchingEngine(rules)
+        for record in read_journal(path):
+            events = self._engine.process(record.command)
+            if on_recovered is not None:
+                on_recovered(record, events)
+        recovered = self._engine.sequence
         if recovered:
             logger.info(
                 "recovered %d commands from %s",

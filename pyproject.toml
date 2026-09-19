@@ -78,6 +78,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "D",       # test names are the documentation
+    "PLR0913", # a builder for test messages is allowed to take many options
     "PLR2004", # literal quantities and prices are the point of a test
     "S101",    # pytest uses assert
     "S311",    # seeded pseudo-random sequences are the point, not a security risk
