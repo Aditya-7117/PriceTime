@@ -61,6 +61,11 @@ EVERY_KIND: list[Command] = [
 ]
 
 
+def recorded(path: Path) -> list[Command]:
+    """The commands in a journal, without their sequence numbers or annotations."""
+    return [record.command for record in read_journal(path)]
+
+
 def write(path: Path, commands: list[Command], rules: MarketRules = RULES) -> None:
     with JournalWriter(path, rules) as writer:
         for command in commands:
@@ -72,7 +77,7 @@ def test_commands_read_back_exactly_as_written(tmp_path: Path) -> None:
 
     write(path, EVERY_KIND)
 
-    assert list(read_journal(path)) == EVERY_KIND
+    assert recorded(path) == EVERY_KIND
 
 
 def test_records_are_numbered_from_one_in_the_order_written(tmp_path: Path) -> None:
@@ -91,7 +96,7 @@ def test_reopening_a_journal_appends_rather_than_truncating(tmp_path: Path) -> N
 
     write(path, EVERY_KIND[2:])
 
-    assert list(read_journal(path)) == EVERY_KIND
+    assert recorded(path) == EVERY_KIND
     records = path.read_text().splitlines()[1:]
     assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5, 6]
 
@@ -100,9 +105,9 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
     path = tmp_path / "journal.jsonl"
     path.touch()
 
-    assert list(read_journal(path)) == []
+    assert recorded(path) == []
     write(path, EVERY_KIND[:1])
-    assert list(read_journal(path)) == EVERY_KIND[:1]
+    assert recorded(path) == EVERY_KIND[:1]
 
 
 @pytest.mark.parametrize(
@@ -197,7 +202,7 @@ def test_reader_refuses_a_damaged_journal(tmp_path: Path, content: str, problem:
     path.write_text(content)
 
     with pytest.raises(JournalError, match=problem):
-        list(read_journal(path))
+        recorded(path)
 
 
 def test_writer_refuses_to_append_to_a_damaged_journal(tmp_path: Path) -> None:
@@ -218,7 +223,7 @@ def test_closing_twice_is_harmless(tmp_path: Path) -> None:
     writer.close()
     writer.close()
 
-    assert list(read_journal(path)) == EVERY_KIND[:1]
+    assert recorded(path) == EVERY_KIND[:1]
 
 
 def test_journaled_engine_records_a_command_before_applying_it(tmp_path: Path) -> None:
@@ -249,7 +254,7 @@ def test_reopening_a_journaled_engine_recovers_its_state(tmp_path: Path) -> None
             second_run.process(command)
 
     assert second_run.engine.snapshot() == uninterrupted.snapshot()
-    assert list(read_journal(path)) == commands
+    assert recorded(path) == commands
 
 
 @given(market_rules, command_sequences())
@@ -263,7 +268,7 @@ def test_replaying_a_journal_reproduces_every_event_and_the_final_state(
 
         assert read_rules(path) == rules
         replayed = new_engine(rules)
-        replayed_events = [replayed.process(command) for command in read_journal(path)]
+        replayed_events = [replayed.process(record.command) for record in read_journal(path)]
 
         assert replayed_events == live_events
         assert replayed.snapshot() == live.engine.snapshot()
@@ -320,7 +325,7 @@ def test_reopening_a_journal_under_different_rules_is_refused(tmp_path: Path) ->
     with pytest.raises(JournalError, match="different market rules"):
         JournaledEngine(path, replace(RULES, opening_price=101))
 
-    assert list(read_journal(path)) == [buy(100, 5)]
+    assert recorded(path) == [buy(100, 5)]
 
 
 def test_replaying_a_journal_with_no_header_is_refused(tmp_path: Path) -> None:

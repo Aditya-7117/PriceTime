@@ -12,6 +12,7 @@ The line format lives in `pricetime.codec`. This module owns the file.
 import logging
 import os
 from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 from types import TracebackType
 from typing import IO, Self
@@ -29,6 +30,18 @@ from pricetime.events import Event
 from pricetime.rules import MarketRules
 
 logger = logging.getLogger(__name__)
+
+
+type Annotation = dict[str, str] | None
+
+
+@dataclass(frozen=True, slots=True)
+class JournalRecord:
+    """One line of the journal: a command, its number, and who it belongs to."""
+
+    sequence: int
+    command: Command
+    annotation: Annotation = None
 
 
 class JournalError(Exception):
@@ -64,8 +77,13 @@ class JournalWriter:
     ) -> None:
         self.close()
 
-    def append(self, command: Command) -> int:
+    def append(self, command: Command, annotation: Annotation = None) -> int:
         """Write one command and flush it to the operating system.
+
+        Args:
+            command: The command to record.
+            annotation: What the layer above the engine needs to rebuild its own
+                state from this journal. The engine ignores it.
 
         Returns:
             The command's sequence number.
@@ -76,16 +94,26 @@ class JournalWriter:
         if self._file.closed:
             raise JournalError("journal is closed")
         sequence = self._next_sequence
-        self._write_line(encode_command(sequence, command))
+        self._write_line(encode_command(sequence, command, annotation))
         self._next_sequence += 1
         return sequence
+
+    def sync(self) -> None:
+        """Force everything written so far onto the disk.
+
+        The gateway calls this once per batch, before any acknowledgement goes
+        out, so nothing is admitted to a client that the disk does not hold.
+        """
+        if self._file.closed:
+            return
+        self._file.flush()
+        os.fsync(self._file.fileno())
 
     def close(self) -> None:
         """Force everything written to disk, then close. Safe to call more than once."""
         if self._file.closed:
             return
-        self._file.flush()
-        os.fsync(self._file.fileno())
+        self.sync()
         self._file.close()
 
     def _write_line(self, line: str) -> None:
@@ -103,8 +131,8 @@ def read_rules(path: Path) -> MarketRules | None:
         return _header_rules(file.readline())
 
 
-def read_journal(path: Path) -> Iterator[Command]:
-    """Yield the commands in a journal in order, checking every record on the way.
+def read_journal(path: Path) -> Iterator[JournalRecord]:
+    """Yield the records in a journal in order, checking every one on the way.
 
     An empty file is an empty journal: nothing was ever recorded.
 
@@ -121,13 +149,13 @@ def read_journal(path: Path) -> Iterator[Command]:
             if not line.endswith("\n"):
                 raise JournalError(f"{where}: incomplete final record, cut off mid-write")
             try:
-                sequence, command = decode_command(line)
+                sequence, command, annotation = decode_command(line)
             except DecodeError as error:
                 raise JournalError(f"{where}: {error}") from error
             if sequence != expected:
                 raise JournalError(f"{where}: expected sequence {expected}, found {sequence}")
             expected += 1
-            yield command
+            yield JournalRecord(sequence=sequence, command=command, annotation=annotation)
 
 
 def replay(path: Path) -> MatchingEngine:
@@ -140,8 +168,8 @@ def replay(path: Path) -> MatchingEngine:
     if rules is None:
         raise JournalError(f"{path} has no header, so there is nothing to replay")
     engine = MatchingEngine(rules)
-    for command in read_journal(path):
-        engine.process(command)
+    for record in read_journal(path):
+        engine.process(record.command)
     return engine
 
 
@@ -181,14 +209,23 @@ class JournaledEngine:
         """The engine behind the journal, for inspection."""
         return self._engine
 
-    def process(self, command: Command) -> list[Event]:
+    def process(self, command: Command, annotation: Annotation = None) -> list[Event]:
         """Record a command, then apply it and return the events it caused.
+
+        Args:
+            command: The command to apply.
+            annotation: Anything the caller needs to rebuild its own state from
+                the journal later. The engine ignores it.
 
         Raises:
             JournalError: If the journal has been closed. The command is not applied.
         """
-        self._writer.append(command)
+        self._writer.append(command, annotation)
         return self._engine.process(command)
+
+    def sync(self) -> None:
+        """Force every command recorded so far onto the disk."""
+        self._writer.sync()
 
     def close(self) -> None:
         """Close the journal. Commands can no longer be processed."""

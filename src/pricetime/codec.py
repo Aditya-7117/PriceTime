@@ -25,6 +25,7 @@ FORMAT = "pricetime-journal"
 VERSION = 1
 
 type _Record = dict[str, object]
+type _Annotation = dict[str, str] | None
 
 
 class DecodeError(ValueError):
@@ -62,8 +63,13 @@ def decode_header(line: str) -> MarketRules:
     return _decode_rules(header["rules"])
 
 
-def encode_command(sequence: int, command: Command) -> str:
-    """One journal line for a command and its sequence number."""
+def encode_command(sequence: int, command: Command, annotation: _Annotation = None) -> str:
+    """One journal line for a command, its sequence number and who it belongs to.
+
+    The annotation is whatever the layer above the engine needs to rebuild its
+    own state from the journal: for the FIX gateway, the session, the client's
+    order ID and the account. The engine neither reads it nor cares about it.
+    """
     record: _Record
     match command:
         case NewLimitOrder():
@@ -99,11 +105,13 @@ def encode_command(sequence: int, command: Command) -> str:
             }
         case _:
             assert_never(command)
+    if annotation:
+        record["ref"] = dict(annotation)
     return _dumps(record)
 
 
-def decode_command(line: str) -> tuple[int, Command]:
-    """The sequence number and command in one journal line.
+def decode_command(line: str) -> tuple[int, Command, _Annotation]:
+    """The sequence number, command and annotation in one journal line.
 
     Raises:
         DecodeError: If the line is not a valid command record.
@@ -119,9 +127,20 @@ def decode_command(line: str) -> tuple[int, Command]:
         raise DecodeError(f"unknown command type {kind!r}")
     fields, build = _DECODERS[kind]
     expected = {"seq", "type", *fields}
-    if set(record) != expected:
+    if set(record) - {"ref"} != expected:
         raise DecodeError(f"expected fields {sorted(expected)}, found {sorted(record)}")
-    return _integer(record, "seq"), build(record)
+    return _integer(record, "seq"), build(record), _annotation(record)
+
+
+def _annotation(record: _Record) -> _Annotation:
+    reference = record.get("ref")
+    if reference is None:
+        return None
+    if not isinstance(reference, dict) or not all(
+        isinstance(key, str) and isinstance(value, str) for key, value in reference.items()
+    ):
+        raise DecodeError(f"ref must map names to text, found {reference!r}")
+    return reference
 
 
 def _dumps(value: _Record) -> str:

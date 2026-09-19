@@ -55,7 +55,23 @@ def test_a_header_decodes_to_the_rules_it_was_written_with(rules: MarketRules) -
     ids=["limit", "ioc limit", "market", "cancel", "modify"],
 )
 def test_a_command_decodes_to_itself_and_its_sequence_number(command: Command) -> None:
-    assert decode_command(encode_command(42, command)) == (42, command)
+    assert decode_command(encode_command(42, command)) == (42, command, None)
+
+
+def test_an_annotation_travels_with_the_command() -> None:
+    cancel = CancelOrder(order_id=3)
+    reference = {"session": "CLIENT1", "clordid": "A-1"}
+
+    line = encode_command(7, cancel, reference)
+
+    assert decode_command(line) == (7, cancel, reference)
+
+
+def test_a_malformed_annotation_is_refused() -> None:
+    line = encode_command(7, CancelOrder(order_id=3)).removesuffix("}") + ',"ref":{"session":5}}'
+
+    with pytest.raises(DecodeError, match="ref must map names to text"):
+        decode_command(line)
 
 
 @pytest.mark.parametrize(
