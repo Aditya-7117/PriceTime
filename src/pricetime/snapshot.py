@@ -4,7 +4,7 @@ import hashlib
 import json
 from dataclasses import dataclass
 
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -17,6 +17,8 @@ class RestingOrder:
     remaining: int
     filled: int
     priority: int
+    client_id: int
+    self_trade: SelfTradeAction
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -64,4 +66,6 @@ def _fields(order: RestingOrder) -> list[int | str]:
         order.remaining,
         order.filled,
         order.priority,
+        order.client_id,
+        order.self_trade.value,
     ]

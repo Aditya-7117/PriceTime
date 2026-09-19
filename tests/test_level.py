@@ -1,12 +1,18 @@
 import pytest
 
 from pricetime.level import PriceLevel
-from pricetime.orders import Order, Side
+from pricetime.orders import Order, SelfTradeAction, Side
 
 
 def make_order(order_id: int, quantity: int = 10, price: int = 100) -> Order:
     return Order(
-        order_id=order_id, side=Side.BUY, price=price, remaining=quantity, priority=order_id
+        order_id=order_id,
+        side=Side.BUY,
+        price=price,
+        remaining=quantity,
+        priority=order_id,
+        client_id=1,
+        self_trade=SelfTradeAction.CANCEL_ACTIVE,
     )
 
 

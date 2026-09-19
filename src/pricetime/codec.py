@@ -18,7 +18,7 @@ from pricetime.commands import (
     NewMarketOrder,
     Validity,
 )
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 from pricetime.rules import MarketRules, PriceBand
 
 FORMAT = "pricetime-journal"
@@ -73,7 +73,9 @@ def encode_command(sequence: int, command: Command) -> str:
                 "side": command.side.value,
                 "price": command.price,
                 "quantity": command.quantity,
+                "client_id": command.client_id,
                 "validity": command.validity.value,
+                "self_trade": command.self_trade.value,
             }
         case NewMarketOrder():
             record = {
@@ -81,7 +83,9 @@ def encode_command(sequence: int, command: Command) -> str:
                 "type": "market",
                 "side": command.side.value,
                 "quantity": command.quantity,
+                "client_id": command.client_id,
                 "validity": command.validity.value,
+                "self_trade": command.self_trade.value,
             }
         case CancelOrder():
             record = {"seq": sequence, "type": "cancel", "order_id": command.order_id}
@@ -175,12 +179,24 @@ def _validity(record: _Record) -> Validity:
         raise DecodeError(f"validity must be 'day' or 'ioc', found {value!r}") from error
 
 
+def _self_trade(record: _Record) -> SelfTradeAction:
+    value = record["self_trade"]
+    try:
+        return SelfTradeAction(value)
+    except ValueError as error:
+        raise DecodeError(
+            f"self_trade must be 'cancel_active' or 'cancel_passive', found {value!r}"
+        ) from error
+
+
 def _limit(record: _Record) -> Command:
     return NewLimitOrder(
         side=_side(record),
         price=_integer(record, "price"),
         quantity=_integer(record, "quantity"),
+        client_id=_integer(record, "client_id"),
         validity=_validity(record),
+        self_trade=_self_trade(record),
     )
 
 
@@ -188,7 +204,9 @@ def _market(record: _Record) -> Command:
     return NewMarketOrder(
         side=_side(record),
         quantity=_integer(record, "quantity"),
+        client_id=_integer(record, "client_id"),
         validity=_validity(record),
+        self_trade=_self_trade(record),
     )
 
 
@@ -205,8 +223,8 @@ def _modify(record: _Record) -> Command:
 
 
 _DECODERS: dict[str, tuple[tuple[str, ...], Callable[[_Record], Command]]] = {
-    "limit": (("side", "price", "quantity", "validity"), _limit),
-    "market": (("side", "quantity", "validity"), _market),
+    "limit": (("side", "price", "quantity", "client_id", "validity", "self_trade"), _limit),
+    "market": (("side", "quantity", "client_id", "validity", "self_trade"), _market),
     "cancel": (("order_id",), _cancel),
     "modify": (("order_id", "price", "quantity"), _modify),
 }

@@ -146,3 +146,16 @@ def test_the_last_traded_price_is_always_the_latest_trade(
         if trades:
             last_trade_price = trades[-1].price
         assert engine.snapshot().last_trade_price == last_trade_price
+
+
+@given(market_rules, command_sequences())
+def test_no_client_ever_trades_with_itself(rules: MarketRules, commands: list[Command]) -> None:
+    engine = new_engine(rules)
+    clients: dict[int, int] = {}
+    for command in commands:
+        for event in engine.process(command):
+            if isinstance(event, OrderAccepted):
+                assert isinstance(command, NewLimitOrder | NewMarketOrder)
+                clients[event.order_id] = command.client_id
+            elif isinstance(event, Trade):
+                assert clients[event.maker_order_id] != clients[event.taker_order_id]

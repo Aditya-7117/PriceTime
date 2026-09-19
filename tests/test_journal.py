@@ -25,7 +25,7 @@ from pricetime.journal import (
     read_rules,
     replay,
 )
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 from pricetime.rules import MarketRules, PriceBand
 from tests.strategies import command_sequences, market_rules
 from tests.support import buy, new_engine, random_commands, sell
@@ -45,10 +45,17 @@ NO_BAND = (
 )
 
 EVERY_KIND: list[Command] = [
-    NewLimitOrder(side=Side.BUY, price=101, quantity=10),
-    NewLimitOrder(side=Side.SELL, price=0, quantity=-1),
-    NewLimitOrder(side=Side.SELL, price=102, quantity=3, validity=Validity.IOC),
-    NewMarketOrder(side=Side.SELL, quantity=4),
+    NewLimitOrder(side=Side.BUY, price=101, quantity=10, client_id=1),
+    NewLimitOrder(side=Side.SELL, price=0, quantity=-1, client_id=2),
+    NewLimitOrder(
+        side=Side.SELL,
+        price=102,
+        quantity=3,
+        client_id=1,
+        validity=Validity.IOC,
+        self_trade=SelfTradeAction.CANCEL_PASSIVE,
+    ),
+    NewMarketOrder(side=Side.SELL, quantity=4, client_id=2),
     CancelOrder(order_id=1),
     ModifyOrder(order_id=1, price=102, quantity=7),
 ]
@@ -144,23 +151,31 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
         ),
         pytest.param(
             HEADER + '{"seq":1,"type":"limit","side":"buy","price":"101","quantity":1,'
-            '"validity":"day"}\n',
+            '"validity":"day","client_id":1,"self_trade":"cancel_active"}\n',
             "line 2: price must be an integer",
             id="string price",
         ),
         pytest.param(
-            HEADER + '{"seq":1,"type":"market","side":"buy","quantity":true,"validity":"day"}\n',
+            HEADER + '{"seq":1,"type":"market","side":"buy","quantity":true,"validity":"day",'
+            '"client_id":1,"self_trade":"cancel_active"}\n',
             "line 2: quantity must be an integer",
             id="boolean quantity",
         ),
         pytest.param(
             HEADER + '{"seq":1,"type":"limit","side":"buy","price":101,"quantity":1,'
-            '"validity":"gtc"}\n',
+            '"validity":"gtc","client_id":1,"self_trade":"cancel_active"}\n',
             "line 2: validity must be",
             id="validity",
         ),
         pytest.param(
-            HEADER + '{"seq":1,"type":"market","side":"up","quantity":1,"validity":"day"}\n',
+            HEADER + '{"seq":1,"type":"market","side":"buy","quantity":1,"validity":"day",'
+            '"client_id":1,"self_trade":"cancel_both"}\n',
+            "line 2: self_trade must be",
+            id="self trade",
+        ),
+        pytest.param(
+            HEADER + '{"seq":1,"type":"market","side":"up","quantity":1,"validity":"day",'
+            '"client_id":1,"self_trade":"cancel_active"}\n',
             "line 2: side must be",
             id="side",
         ),

@@ -15,7 +15,7 @@ from pricetime.commands import (
     NewMarketOrder,
     Validity,
 )
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 from pricetime.rules import MarketRules, PriceBand
 
 
@@ -39,9 +39,16 @@ def test_a_header_decodes_to_the_rules_it_was_written_with(rules: MarketRules) -
 @pytest.mark.parametrize(
     "command",
     [
-        NewLimitOrder(side=Side.BUY, price=101, quantity=10),
-        NewLimitOrder(side=Side.SELL, price=99, quantity=2, validity=Validity.IOC),
-        NewMarketOrder(side=Side.SELL, quantity=4),
+        NewLimitOrder(side=Side.BUY, price=101, quantity=10, client_id=1),
+        NewLimitOrder(
+            side=Side.SELL,
+            price=99,
+            quantity=2,
+            client_id=2,
+            validity=Validity.IOC,
+            self_trade=SelfTradeAction.CANCEL_PASSIVE,
+        ),
+        NewMarketOrder(side=Side.SELL, quantity=4, client_id=3, validity=Validity.IOC),
         CancelOrder(order_id=3),
         ModifyOrder(order_id=3, price=99, quantity=7),
     ],

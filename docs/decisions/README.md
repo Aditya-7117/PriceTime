@@ -20,3 +20,4 @@ A record that a later one replaces is marked `superseded`, and it says by which.
 | [13](0013-market-rules-and-price-bands.md) | Market rules per engine, starting with the daily price band |
 | [14](0014-day-and-ioc-validity.md) | DAY and IOC validity |
 | [15](0015-market-price-protection.md) | Market orders follow NSE's market price protection |
+| [16](0016-self-trade-prevention.md) | Self-trade prevention, as NSE's check works |

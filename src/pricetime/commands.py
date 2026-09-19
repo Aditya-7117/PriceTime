@@ -8,7 +8,7 @@ recorded sequence replayable.
 import enum
 from dataclasses import dataclass
 
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 
 
 class Validity(enum.Enum):
@@ -26,13 +26,17 @@ class NewLimitOrder:
     """Buy or sell up to `quantity` at `price` or better.
 
     What does not fill at once rests on the book for a DAY order, and is
-    cancelled for an IOC order.
+    cancelled for an IOC order. `client_id` identifies who the order belongs to,
+    as NSE identifies a client by PAN, so the order never trades with the same
+    client's orders; `self_trade` says what to cancel when it would.
     """
 
     side: Side
     price: int
     quantity: int
+    client_id: int
     validity: Validity = Validity.DAY
+    self_trade: SelfTradeAction = SelfTradeAction.CANCEL_ACTIVE
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -41,12 +45,15 @@ class NewMarketOrder:
 
     It trades no further from the last traded price than the market rules
     allow. What it cannot fill is cancelled if orders remain beyond the band, or
-    if it is IOC. Otherwise a DAY market order rests as a limit order.
+    if it is IOC. Otherwise a DAY market order rests as a limit order. Clients
+    and self-trade prevention work as for a limit order.
     """
 
     side: Side
     quantity: int
+    client_id: int
     validity: Validity = Validity.DAY
+    self_trade: SelfTradeAction = SelfTradeAction.CANCEL_ACTIVE
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

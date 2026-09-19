@@ -1,5 +1,6 @@
 """Checks that must hold after every command, whatever the command sequence."""
 
+from dataclasses import dataclass
 from itertools import pairwise
 
 from pricetime.book import BookSide
@@ -17,7 +18,7 @@ from pricetime.events import (
     OrderRejected,
     Trade,
 )
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 from pricetime.rules import MarketRules
 from pricetime.snapshot import EngineSnapshot, RestingOrder
 
@@ -129,60 +130,126 @@ class Ledger:
 def check_price_time_priority(
     before: EngineSnapshot, command: Command, events: list[Event], rules: MarketRules
 ) -> None:
-    """Trades took the opposite side strictly in priority order, and stopped only when they had to.
+    """The incoming order worked through the opposite side strictly in priority order.
 
     The snapshot before the command lists the opposite side in priority order,
-    so an incoming order must trade with a prefix of that list: every maker but
-    the last filled completely, at the maker's own price, all within the
-    incoming order's limit. If the incoming order is left with open quantity,
-    the next maker in line must be beyond its limit, or there must be none.
+    so an incoming order must touch a prefix of that list, all within its limit.
+    Each resting order it touches is either traded with, at the resting order's
+    own price, or, if it belongs to the incoming order's own client under
+    cancel passive, cancelled. Every order it trades with but the last fills
+    completely. If the incoming order is left with open quantity, the next
+    resting order must be beyond its limit, or be its own client's order under
+    cancel active, or there must be none.
     """
-    trades = [event for event in events if isinstance(event, Trade)]
     incoming = _incoming_order(before, command, events, rules)
+    touched = [
+        e
+        for e in events
+        if isinstance(e, Trade)
+        or (
+            isinstance(e, OrderCancelled)
+            and e.reason is CancelReason.SELF_TRADE
+            and (incoming is None or e.order_id != incoming.order_id)
+        )
+    ]
     if incoming is None:
-        assert not trades, "trades from a command that does not take liquidity"
+        assert not touched, "a command that does not take liquidity touched the book"
         return
-    side, limit, quantity = incoming
-    queue = before.asks if side is Side.BUY else before.bids
+    queue = before.asks if incoming.side is Side.BUY else before.bids
 
-    assert len(trades) <= len(queue)
-    for maker, trade in zip(queue, trades, strict=False):
-        assert trade.maker_order_id == maker.order_id, "traded out of priority order"
-        assert trade.price == maker.price
-        assert trade.aggressor is side
-        assert _within_limit(side, limit, trade.price)
-    for maker, trade in zip(queue, trades[:-1], strict=False):
-        assert trade.quantity == maker.remaining, "moved on before the maker filled"
+    assert len(touched) <= len(queue)
+    for maker, event in zip(queue, touched, strict=False):
+        assert _within_limit(incoming.side, incoming.limit, maker.price)
+        if isinstance(event, Trade):
+            assert event.maker_order_id == maker.order_id, "traded out of priority order"
+            assert event.price == maker.price
+            assert event.aggressor is incoming.side
+            assert maker.client_id != incoming.client_id, "traded with its own client"
+        else:
+            assert event.order_id == maker.order_id, "cancelled out of priority order"
+            assert maker.client_id == incoming.client_id
+            assert incoming.self_trade is SelfTradeAction.CANCEL_PASSIVE
+            assert event.quantity == maker.remaining
+    for maker, event in zip(queue, touched[:-1], strict=False):
+        if isinstance(event, Trade):
+            assert event.quantity == maker.remaining, "moved on before the maker filled"
 
-    filled = sum(trade.quantity for trade in trades)
-    assert filled <= quantity
-    if filled < quantity:
-        if trades:
-            assert trades[-1].quantity == queue[len(trades) - 1].remaining
-        if len(trades) < len(queue):
-            next_price = queue[len(trades)].price
-            assert not _within_limit(side, limit, next_price), "stopped while still crossing"
+    filled = sum(e.quantity for e in touched if isinstance(e, Trade))
+    assert filled <= incoming.quantity
+    if filled == incoming.quantity:
+        return
+    last = touched[-1] if touched else None
+    if isinstance(last, Trade):
+        assert last.quantity == queue[len(touched) - 1].remaining
+    stopped_by_self_trade = any(
+        isinstance(e, OrderCancelled)
+        and e.order_id == incoming.order_id
+        and e.reason is CancelReason.SELF_TRADE
+        for e in events
+    )
+    if len(touched) < len(queue):
+        following = queue[len(touched)]
+        crossing = _within_limit(incoming.side, incoming.limit, following.price)
+        own = (
+            following.client_id == incoming.client_id
+            and incoming.self_trade is SelfTradeAction.CANCEL_ACTIVE
+        )
+        assert stopped_by_self_trade == (crossing and own)
+        assert not crossing or own, "stopped while still crossing"
+    else:
+        assert not stopped_by_self_trade
+
+
+@dataclass(frozen=True, slots=True)
+class _Incoming:
+    order_id: int
+    side: Side
+    limit: int
+    quantity: int
+    client_id: int
+    self_trade: SelfTradeAction
 
 
 def _incoming_order(
     before: EngineSnapshot, command: Command, events: list[Event], rules: MarketRules
-) -> tuple[Side, int, int] | None:
-    """The side, limit and quantity of an order this command sent into the book to trade."""
+) -> _Incoming | None:
+    """The order this command sent into the book to trade, if it sent one."""
     if not events:
         return None
     first = events[0]
     match command:
         case NewLimitOrder() if isinstance(first, OrderAccepted):
-            return command.side, command.price, command.quantity
+            return _Incoming(
+                first.order_id,
+                command.side,
+                command.price,
+                command.quantity,
+                command.client_id,
+                command.self_trade,
+            )
         case NewMarketOrder() if isinstance(first, OrderAccepted):
             assert before.last_trade_price is not None, "market order accepted with no band"
             limit = protection_limit(command.side, before.last_trade_price, rules)
-            return command.side, limit, command.quantity
+            return _Incoming(
+                first.order_id,
+                command.side,
+                limit,
+                command.quantity,
+                command.client_id,
+                command.self_trade,
+            )
         case ModifyOrder() if (
             isinstance(first, OrderModified) and not first.kept_priority and first.remaining
         ):
             (order,) = (o for o in resting_orders(before) if o.order_id == command.order_id)
-            return order.side, command.price, first.remaining
+            return _Incoming(
+                order.order_id,
+                order.side,
+                command.price,
+                first.remaining,
+                order.client_id,
+                order.self_trade,
+            )
         case _:
             return None
 
@@ -217,6 +284,11 @@ def check_market_order_outcome(
         case OrderCancelled(order_id=cancelled, reason=CancelReason.PRICE_PROTECTION):
             assert cancelled == order_id
             assert opposite, "cancelled for protection with nothing beyond the band"
+        case OrderCancelled(order_id=cancelled, reason=CancelReason.SELF_TRADE):
+            assert cancelled == order_id
+            assert command.self_trade is SelfTradeAction.CANCEL_ACTIVE
+            assert opposite, "stopped for a self-trade with nothing left to meet"
+            assert opposite[0].client_id == command.client_id
         case OrderCancelled(order_id=cancelled, reason=CancelReason.UNFILLED_IOC):
             assert cancelled == order_id
             assert command.validity is Validity.IOC

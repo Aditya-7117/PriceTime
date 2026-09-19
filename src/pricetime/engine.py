@@ -24,7 +24,7 @@ from pricetime.events import (
     RejectReason,
     Trade,
 )
-from pricetime.orders import Order, Side
+from pricetime.orders import Order, SelfTradeAction, Side
 from pricetime.rules import MarketRules
 from pricetime.snapshot import EngineSnapshot, RestingOrder
 
@@ -93,11 +93,13 @@ class MatchingEngine:
                 quantity=command.quantity,
             )
         ]
-        order = self._incoming(order_id, command.side, command.price, command.quantity)
-        self._sweep(events, order)
+        order = self._incoming(order_id, command, command.price)
+        self_trade = self._sweep(events, order)
         if not order.remaining:
             return events
-        if command.validity is Validity.IOC:
+        if self_trade:
+            events.append(_cancelled(order, CancelReason.SELF_TRADE))
+        elif command.validity is Validity.IOC:
             events.append(_cancelled(order, CancelReason.UNFILLED_IOC))
         else:
             self._book.add(order)
@@ -127,11 +129,13 @@ class MatchingEngine:
             )
         ]
         limit = self._rules.protection_limit(command.side, self._last_trade_price)
-        order = self._incoming(order_id, command.side, limit, command.quantity)
-        self._sweep(events, order)
+        order = self._incoming(order_id, command, limit)
+        self_trade = self._sweep(events, order)
         if not order.remaining:
             return events
-        if self._book.side(command.side.opposite).best() is not None:
+        if self_trade:
+            events.append(_cancelled(order, CancelReason.SELF_TRADE))
+        elif self._book.side(command.side.opposite).best() is not None:
             events.append(_cancelled(order, CancelReason.PRICE_PROTECTION))
         elif command.validity is Validity.IOC:
             events.append(_cancelled(order, CancelReason.UNFILLED_IOC))
@@ -182,12 +186,14 @@ class MatchingEngine:
         order.price = command.price
         order.remaining = remaining
         order.priority = self._sequence
-        self._sweep(events, order)
-        if order.remaining:
+        self_trade = self._sweep(events, order)
+        if self_trade:
+            events.append(_cancelled(order, CancelReason.SELF_TRADE))
+        elif order.remaining:
             self._book.add(order)
         return events
 
-    def _sweep(self, events: list[Event], taker: Order) -> None:
+    def _sweep(self, events: list[Event], taker: Order) -> bool:
         """Trade an incoming order against the opposite side of the book.
 
         Walks the opposite side from the best price, and each level from its
@@ -195,6 +201,14 @@ class MatchingEngine:
         beyond the incoming order's price. Every trade is at the resting order's
         price and moves the last traded price. Resting orders that fill leave the
         book as they go. The incoming order's own quantities are updated in place.
+
+        A resting order from the incoming order's own client is never traded
+        with. The incoming order's choice decides: cancel passive removes the
+        resting order and carries on; cancel active stops the sweep.
+
+        Returns:
+            True if the sweep stopped at the client's own order under cancel
+            active, so the caller must cancel what is left of the incoming order.
         """
         opposite = self._book.side(taker.side.opposite)
         buying = taker.side is Side.BUY
@@ -203,8 +217,14 @@ class MatchingEngine:
             if level is None or (
                 level.price > taker.price if buying else level.price < taker.price
             ):
-                return
+                return False
             while taker.remaining and (maker := level.head) is not None:
+                if maker.client_id == taker.client_id:
+                    if taker.self_trade is SelfTradeAction.CANCEL_ACTIVE:
+                        return True
+                    self._book.remove(maker)
+                    events.append(_cancelled(maker, CancelReason.SELF_TRADE))
+                    continue
                 traded = min(taker.remaining, maker.remaining)
                 level.reduce(maker, traded)
                 maker.filled += traded
@@ -224,15 +244,20 @@ class MatchingEngine:
                 self._next_trade_id += 1
                 if not maker.remaining:
                     self._book.remove(maker)
+        return False
 
-    def _incoming(self, order_id: int, side: Side, price: int, quantity: int) -> Order:
+    def _incoming(
+        self, order_id: int, command: NewLimitOrder | NewMarketOrder, price: int
+    ) -> Order:
         """A new order, not yet on the book, with this command's time priority."""
         return Order(
             order_id=order_id,
-            side=side,
+            side=command.side,
             price=price,
-            remaining=quantity,
+            remaining=command.quantity,
             priority=self._sequence,
+            client_id=command.client_id,
+            self_trade=command.self_trade,
         )
 
     def _price_problem(self, price: int) -> RejectReason | None:
@@ -284,6 +309,8 @@ def _resting_orders(side: BookSide) -> tuple[RestingOrder, ...]:
             remaining=order.remaining,
             filled=order.filled,
             priority=order.priority,
+            client_id=order.client_id,
+            self_trade=order.self_trade,
         )
         for level in side
         for order in level

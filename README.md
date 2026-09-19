@@ -7,7 +7,7 @@ identical book.
 
 Written in Python. Correctness and measurement come before raw speed. Where an exchange's rules
 matter, it follows those the National Stock Exchange of India (NSE) publishes: daily price bands,
-DAY and IOC validity, and market price protection.
+DAY and IOC validity, market price protection, and self-trade prevention.
 
 ## What works today
 
@@ -15,11 +15,13 @@ DAY and IOC validity, and market price protection.
   validity.
 - NSE's market price protection: a market order trades no further than a set percentage from the
   last traded price.
+- NSE's self-trade prevention: an order never trades with its own client's order, and each order
+  chooses whether the incoming or the resting order is cancelled instead.
 - A daily price band per instrument, and exact conversion of decimal prices to integer ticks.
 - Price levels as first-in, first-out queues built from intrusive linked lists, and an index from
   order ID to order, so a cancel is a dictionary lookup and an unlink rather than a scan.
 - An append-only, write-ahead journal of every command, with replay and crash recovery.
-- Property-based tests that check eleven invariants after every command of generated command
+- Property-based tests that check twelve invariants after every command of generated command
   sequences.
 
 Not built yet: the FIX 4.4 session layer and the latency benchmark. See [Limitations](#limitations).
@@ -66,6 +68,10 @@ beyond that band, its remainder is cancelled. Otherwise the other side of the bo
 DAY market order rests as a limit order at the best price on its own side, or at the last traded
 price.
 
+An order never trades with an order from its own client. Each order carries a client ID and its
+own choice, as NSE's self-trade prevention check allows: cancel active cancels what is left of the
+incoming order; cancel passive cancels the resting order and keeps matching behind it.
+
 The engine takes one command at a time and returns the list of events it caused. It calls nothing
 while matching, so no outside code can re-enter it mid-match. It reads no clock and no randomness:
 time priority is the order in which commands arrive. That is what makes replay exact.
@@ -102,10 +108,12 @@ every command of every generated command sequence:
 | An IOC order never rests | After its command, no IOC order is on the book |
 | Market orders follow market price protection | A remainder is cancelled for protection only if orders lie beyond the band; otherwise IOC cancels and DAY rests at the price the circular names |
 | The last traded price is the latest trade | It always equals the price of the most recent trade, or the opening price before any |
+| No client trades with itself | Every trade's two orders belong to different clients |
 
 The generator follows the order IDs it has issued, so cancels and modifies mostly hit live orders.
-To check that the tests can fail, twenty deliberate bugs were planted in the engine one at a time,
-twelve in the core matching and eight in the NSE rules; the property suite caught every one. Details are in
+To check that the tests can fail, twenty-six deliberate bugs were planted in the engine one at a
+time, twelve in the core matching and fourteen in the NSE rules; the property suite caught every
+one. Details are in
 [decision 8](docs/decisions/0008-property-test-design.md).
 
 ## Quick start
@@ -144,10 +152,10 @@ rules = MarketRules(
     opening_price=100,
 )
 engine = MatchingEngine(rules)
-engine.process(NewLimitOrder(side=Side.SELL, price=101, quantity=100))
-engine.process(NewLimitOrder(side=Side.SELL, price=102, quantity=100))
+engine.process(NewLimitOrder(side=Side.SELL, price=101, quantity=100, client_id=1))
+engine.process(NewLimitOrder(side=Side.SELL, price=102, quantity=100, client_id=1))
 
-events = engine.process(NewLimitOrder(side=Side.BUY, price=102, quantity=150))
+events = engine.process(NewLimitOrder(side=Side.BUY, price=102, quantity=150, client_id=2))
 trades = [(e.price, e.quantity) for e in events if isinstance(e, Trade)]
 assert trades == [(101, 100), (102, 50)]
 
@@ -171,8 +179,6 @@ options, what was chosen and what it costs.
 - **No benchmark yet,** so this README publishes no latency figures. When they come, they will come
   with their method.
 - **One instrument per engine.** There is no symbol on a command.
-- **No self-match prevention.** Two orders from the same owner can trade with each other, because
-  orders carry no owner yet.
 - **Limit and market orders only.** No stop-loss orders, no fill-or-kill, no disclosed (iceberg)
   quantity, and no pre-open call auction.
 - **Restart replays the whole journal.** There are no snapshots, so recovery time grows with the

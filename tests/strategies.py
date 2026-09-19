@@ -18,13 +18,17 @@ from pricetime.commands import (
     NewMarketOrder,
     Validity,
 )
-from pricetime.orders import Side
+from pricetime.orders import SelfTradeAction, Side
 from pricetime.rules import MarketRules, PriceBand
 
 BUY_PRICES = st.integers(min_value=95, max_value=102)
 SELL_PRICES = st.integers(min_value=98, max_value=105)
 QUANTITIES = st.integers(min_value=1, max_value=20)
 INVALID_VALUES = st.sampled_from([0, -1])
+# Three clients, so orders meet their own client's orders often enough to exercise
+# self-trade prevention, and both of its choices.
+CLIENTS = st.integers(min_value=1, max_value=3)
+SELF_TRADE = st.sampled_from(SelfTradeAction)
 # Mostly DAY, so books build depth; IOC often enough to exercise its cancels.
 VALIDITIES = st.sampled_from([Validity.DAY, Validity.DAY, Validity.DAY, Validity.IOC])
 
@@ -81,18 +85,33 @@ def command_sequences(draw: st.DrawFn, max_size: int = 100) -> list[Command]:
         if kind == "limit":
             price, quantity, validity = draw(prices_for(side)), draw(QUANTITIES), draw(VALIDITIES)
             commands.append(
-                NewLimitOrder(side=side, price=price, quantity=quantity, validity=validity)
+                NewLimitOrder(
+                    side=side,
+                    price=price,
+                    quantity=quantity,
+                    client_id=draw(CLIENTS),
+                    validity=validity,
+                    self_trade=draw(SELF_TRADE),
+                )
             )
             limits[next_order_id] = (side, price, quantity)
         elif kind == "market":
             commands.append(
-                NewMarketOrder(side=side, quantity=draw(QUANTITIES), validity=draw(VALIDITIES))
+                NewMarketOrder(
+                    side=side,
+                    quantity=draw(QUANTITIES),
+                    client_id=draw(CLIENTS),
+                    validity=draw(VALIDITIES),
+                    self_trade=draw(SELF_TRADE),
+                )
             )
         else:
             bad_price = draw(st.booleans())
             price = draw(INVALID_VALUES) if bad_price else draw(prices_for(side))
             quantity = draw(QUANTITIES) if bad_price else draw(INVALID_VALUES)
-            commands.append(NewLimitOrder(side=side, price=price, quantity=quantity))
+            commands.append(
+                NewLimitOrder(side=side, price=price, quantity=quantity, client_id=draw(CLIENTS))
+            )
         next_order_id += 1
     return commands
 

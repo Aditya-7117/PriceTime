@@ -42,6 +42,9 @@ class CancelReason(enum.Enum):
     PRICE_PROTECTION = "price_protection"
     """A market order reached the edge of its protection band with orders still beyond it."""
 
+    SELF_TRADE = "self_trade"
+    """The order would have traded with its own client's order (NSE's self-trade prevention)."""
+
     UNFILLED_IOC = "unfilled_ioc"
     """An immediate-or-cancel order could not fill completely at once."""
 

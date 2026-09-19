@@ -18,6 +18,20 @@ class Side(enum.Enum):
         return Side.SELL if self is Side.BUY else Side.BUY
 
 
+class SelfTradeAction(enum.Enum):
+    """What to cancel when an order would trade against its own client's order.
+
+    NSE's self-trade prevention check lets each order choose at entry. The
+    incoming order is the active one; the resting order is the passive one.
+    """
+
+    CANCEL_ACTIVE = "cancel_active"
+    """Cancel what is left of the incoming order. Trades it made before stand."""
+
+    CANCEL_PASSIVE = "cancel_passive"
+    """Cancel the resting order, and let the incoming order keep matching behind it."""
+
+
 @dataclass(slots=True, eq=False, kw_only=True)
 class Order:
     """A resting order, which is also its own node in its price level's queue.
@@ -36,6 +50,9 @@ class Order:
         remaining: Quantity still open on the book.
         priority: Engine sequence number at which the order took its current
             queue position. Lower means earlier.
+        client_id: The client the order belongs to, for self-trade prevention.
+        self_trade: What to cancel if this order, arriving or re-entering the
+            book, would trade against its own client's order.
         filled: Quantity executed so far.
         prev: The order ahead of this one in the queue.
         next: The order behind this one in the queue.
@@ -46,6 +63,8 @@ class Order:
     price: int
     remaining: int
     priority: int
+    client_id: int
+    self_trade: SelfTradeAction
     filled: int = 0
     prev: Order | None = field(default=None, repr=False)
     next: Order | None = field(default=None, repr=False)
