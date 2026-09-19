@@ -9,13 +9,23 @@ import pytest
 from hypothesis import given
 
 from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
-from pricetime.engine import MatchingEngine
-from pricetime.journal import JournaledEngine, JournalError, JournalWriter, read_journal, replay
+from pricetime.journal import (
+    JournaledEngine,
+    JournalError,
+    JournalWriter,
+    read_journal,
+    read_rules,
+    replay,
+)
 from pricetime.orders import Side
-from tests.strategies import command_sequences
-from tests.support import buy, random_commands, sell
+from pricetime.rules import MarketRules, PriceBand
+from tests.strategies import command_sequences, market_rules
+from tests.support import buy, new_engine, random_commands, sell
 
-HEADER = '{"format":"pricetime-journal","version":1}\n'
+RULES = MarketRules(price_band=PriceBand(lower=90, upper=110))
+HEADER = (
+    '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":90,"upper":110}}}\n'
+)
 
 EVERY_KIND: list[Command] = [
     NewLimitOrder(side=Side.BUY, price=101, quantity=10),
@@ -26,8 +36,8 @@ EVERY_KIND: list[Command] = [
 ]
 
 
-def write(path: Path, commands: list[Command]) -> None:
-    with JournalWriter(path) as writer:
+def write(path: Path, commands: list[Command], rules: MarketRules = RULES) -> None:
+    with JournalWriter(path, rules) as writer:
         for command in commands:
             writer.append(command)
 
@@ -46,7 +56,7 @@ def test_records_are_numbered_from_one_in_the_order_written(tmp_path: Path) -> N
     write(path, EVERY_KIND)
 
     header, *records = path.read_text().splitlines()
-    assert json.loads(header) == {"format": "pricetime-journal", "version": 1}
+    assert json.loads(header)["format"] == "pricetime-journal"
     assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5]
 
 
@@ -73,10 +83,30 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("content", "problem"),
     [
-        pytest.param('{"format":"other","version":1}\n', "not a pricetime journal", id="format"),
-        pytest.param('{"format":"pricet', "not a pricetime journal", id="torn header"),
         pytest.param(
-            '{"format":"pricetime-journal","version":2}\n', "unsupported version", id="version"
+            '{"format":"other","version":1,"rules":{"price_band":null}}\n',
+            "not a pricetime journal",
+            id="format",
+        ),
+        pytest.param('{"format":"pricet', "line 1: incomplete header", id="torn header"),
+        pytest.param(
+            '{"format":"pricetime-journal","version":2,"rules":{"price_band":null}}\n',
+            "unsupported version",
+            id="version",
+        ),
+        pytest.param(
+            '{"format":"pricetime-journal","version":1}\n', "line 1: market rules", id="no rules"
+        ),
+        pytest.param(
+            '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":9}}}\n',
+            "line 1: market rules",
+            id="bad band",
+        ),
+        pytest.param(
+            '{"format":"pricetime-journal","version":1,'
+            '"rules":{"price_band":{"lower":20,"upper":10}}}\n',
+            "line 1: market rules",
+            id="inverted band",
         ),
         pytest.param(HEADER + "not json\n", "line 2: not valid JSON", id="json"),
         pytest.param(HEADER + "[1, 2]\n", "line 2: not a JSON object", id="object"),
@@ -134,14 +164,14 @@ def test_writer_refuses_to_append_to_a_damaged_journal(tmp_path: Path) -> None:
     path.write_text(HEADER + "not json\n")
 
     with pytest.raises(JournalError, match="line 2"):
-        JournalWriter(path)
+        JournalWriter(path, RULES)
 
     assert path.read_text() == HEADER + "not json\n"
 
 
 def test_closing_twice_is_harmless(tmp_path: Path) -> None:
     path = tmp_path / "journal.jsonl"
-    writer = JournalWriter(path)
+    writer = JournalWriter(path, RULES)
     writer.append(EVERY_KIND[0])
 
     writer.close()
@@ -151,7 +181,7 @@ def test_closing_twice_is_harmless(tmp_path: Path) -> None:
 
 
 def test_journaled_engine_records_a_command_before_applying_it(tmp_path: Path) -> None:
-    journaled = JournaledEngine(tmp_path / "journal.jsonl")
+    journaled = JournaledEngine(tmp_path / "journal.jsonl", RULES)
     journaled.process(buy(100, 10))
     journaled.close()
 
@@ -166,14 +196,14 @@ def test_journaled_engine_records_a_command_before_applying_it(tmp_path: Path) -
 def test_reopening_a_journaled_engine_recovers_its_state(tmp_path: Path) -> None:
     path = tmp_path / "journal.jsonl"
     commands = random_commands(seed=11, count=300)
-    uninterrupted = MatchingEngine()
+    uninterrupted = new_engine(RULES)
     for command in commands:
         uninterrupted.process(command)
 
-    with JournaledEngine(path) as first_run:
+    with JournaledEngine(path, RULES) as first_run:
         for command in commands[:200]:
             first_run.process(command)
-    with JournaledEngine(path) as second_run:
+    with JournaledEngine(path, RULES) as second_run:
         for command in commands[200:]:
             second_run.process(command)
 
@@ -181,16 +211,17 @@ def test_reopening_a_journaled_engine_recovers_its_state(tmp_path: Path) -> None
     assert list(read_journal(path)) == commands
 
 
-@given(command_sequences())
+@given(market_rules, command_sequences())
 def test_replaying_a_journal_reproduces_every_event_and_the_final_state(
-    commands: list[Command],
+    rules: MarketRules, commands: list[Command]
 ) -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "journal.jsonl"
-        with JournaledEngine(path) as live:
+        with JournaledEngine(path, rules) as live:
             live_events = [live.process(command) for command in commands]
 
-        replayed = MatchingEngine()
+        assert read_rules(path) == rules
+        replayed = new_engine(rules)
         replayed_events = [replayed.process(command) for command in read_journal(path)]
 
         assert replayed_events == live_events
@@ -221,3 +252,40 @@ def test_replay_in_fresh_interpreters_with_different_hash_seeds_reaches_the_same
             env=env,
         )
         assert result.stdout == expected
+
+
+def test_the_journal_header_records_the_market_rules(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+
+    write(path, [])
+
+    assert read_rules(path) == RULES
+    assert path.read_text() == HEADER
+
+
+def test_replay_applies_the_rules_the_journal_was_written_under(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    write(path, [buy(100, 5), buy(111, 5)])
+
+    engine = replay(path)
+
+    assert [o.order_id for o in engine.snapshot().bids] == [1]
+
+
+def test_reopening_a_journal_under_different_rules_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    write(path, [buy(100, 5)])
+
+    with pytest.raises(JournalError, match="different market rules"):
+        JournaledEngine(path, MarketRules())
+
+    assert list(read_journal(path)) == [buy(100, 5)]
+
+
+def test_replaying_a_journal_with_no_header_is_refused(tmp_path: Path) -> None:
+    path = tmp_path / "journal.jsonl"
+    path.touch()
+
+    assert read_rules(path) is None
+    with pytest.raises(JournalError, match="no header"):
+        replay(path)

@@ -12,11 +12,20 @@ from hypothesis import strategies as st
 
 from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
 from pricetime.orders import Side
+from pricetime.rules import MarketRules, PriceBand
 
 BUY_PRICES = st.integers(min_value=95, max_value=102)
 SELL_PRICES = st.integers(min_value=98, max_value=105)
 QUANTITIES = st.integers(min_value=1, max_value=20)
 INVALID_VALUES = st.sampled_from([0, -1])
+
+# A band that sometimes cuts through the generated prices, so both sides of it are exercised.
+price_bands = st.builds(
+    PriceBand,
+    lower=st.integers(min_value=93, max_value=97),
+    upper=st.integers(min_value=103, max_value=107),
+)
+market_rules = st.builds(MarketRules, price_band=st.none() | price_bands)
 
 # Weights by repetition. Shrinking moves towards the start of the list, so a
 # failing sequence shrinks towards plain limit orders.

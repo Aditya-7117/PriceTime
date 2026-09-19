@@ -5,6 +5,12 @@ import random
 from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
 from pricetime.engine import MatchingEngine
 from pricetime.orders import Side
+from pricetime.rules import MarketRules
+
+
+def new_engine(rules: MarketRules | None = None) -> MatchingEngine:
+    """An engine with the given rules, or with no price band."""
+    return MatchingEngine(MarketRules() if rules is None else rules)
 
 
 def buy(price: int, quantity: int) -> NewLimitOrder:

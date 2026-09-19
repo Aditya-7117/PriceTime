@@ -20,6 +20,9 @@ class RejectReason(enum.Enum):
     INVALID_PRICE = "invalid_price"
     """Price was zero or negative."""
 
+    PRICE_OUT_OF_BAND = "price_out_of_band"
+    """Price was outside the day's price band."""
+
     UNKNOWN_ORDER = "unknown_order"
     """No order with this ID was ever issued."""
 

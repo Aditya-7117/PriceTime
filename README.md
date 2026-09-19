@@ -40,8 +40,11 @@ flowchart LR
 | `book.py` | `BookSide`: one side's levels in priority order. `OrderBook`: both sides plus the ID index |
 | `commands.py` | The four inputs: `NewLimitOrder`, `NewMarketOrder`, `CancelOrder`, `ModifyOrder` |
 | `events.py` | Everything the engine reports: accepts, trades, cancels, modifies, rejections |
+| `rules.py` | `MarketRules`: per-instrument, per-session rules such as the daily price band |
 | `engine.py` | `MatchingEngine`: the matching rules |
 | `snapshot.py` | An immutable copy of the full state, and a SHA-256 digest of it |
+| `prices.py` | Exact conversion between decimal wire prices and integer ticks |
+| `codec.py` | The journal's line format, decoded strictly |
 | `journal.py` | The write-ahead journal, replay, and `JournaledEngine` |
 
 ## How matching works
@@ -116,8 +119,9 @@ from pricetime.commands import CancelOrder, NewLimitOrder
 from pricetime.engine import MatchingEngine
 from pricetime.events import Trade
 from pricetime.orders import Side
+from pricetime.rules import MarketRules, PriceBand
 
-engine = MatchingEngine()
+engine = MatchingEngine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
 engine.process(NewLimitOrder(side=Side.SELL, price=101, quantity=100))
 engine.process(NewLimitOrder(side=Side.SELL, price=102, quantity=100))
 
@@ -129,7 +133,9 @@ engine.process(CancelOrder(order_id=2))
 assert engine.book.best_ask() is None
 ```
 
-Prices are integer ticks. Order IDs are issued by the engine, starting at 1.
+Prices are integer ticks: at a ₹0.05 tick, ₹2450.35 is 49007. `pricetime.prices` converts decimal
+strings to ticks exactly and refuses a price off the tick grid. Order IDs are issued by the engine,
+starting at 1. An order priced outside the day's band is rejected.
 
 ## Decisions
 

@@ -16,6 +16,7 @@ from pricetime.events import (
     Trade,
 )
 from pricetime.orders import Side
+from pricetime.rules import MarketRules
 from pricetime.snapshot import EngineSnapshot, RestingOrder
 
 
@@ -28,6 +29,14 @@ def check_not_crossed(engine: MatchingEngine) -> None:
     best_bid, best_ask = engine.book.best_bid(), engine.book.best_ask()
     if best_bid is not None and best_ask is not None:
         assert best_bid < best_ask, f"crossed book: bid {best_bid} >= ask {best_ask}"
+
+
+def check_within_band(engine: MatchingEngine, rules: MarketRules) -> None:
+    """Every resting order is priced inside the day's price band."""
+    if rules.price_band is None:
+        return
+    for order in resting_orders(engine.snapshot()):
+        assert rules.price_band.contains(order.price), f"order {order.order_id} outside band"
 
 
 def check_structure(engine: MatchingEngine) -> None:

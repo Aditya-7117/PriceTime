@@ -1,10 +1,9 @@
 from pricetime.commands import ModifyOrder
-from pricetime.engine import MatchingEngine
-from tests.support import buy, random_commands
+from tests.support import buy, new_engine, random_commands
 
 
 def test_equal_states_have_equal_digests() -> None:
-    first, second = MatchingEngine(), MatchingEngine()
+    first, second = new_engine(), new_engine()
     for command in random_commands(seed=3, count=200):
         first.process(command)
         second.process(command)
@@ -13,7 +12,7 @@ def test_equal_states_have_equal_digests() -> None:
 
 
 def test_digest_changes_when_an_order_changes() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(buy(100, 10))
     before = engine.snapshot().digest()
 

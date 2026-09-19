@@ -1,6 +1,5 @@
 import pytest
 
-from pricetime.engine import MatchingEngine
 from pricetime.events import (
     CancelReason,
     OrderAccepted,
@@ -10,11 +9,11 @@ from pricetime.events import (
     Trade,
 )
 from pricetime.orders import Side
-from tests.support import buy, market_buy, market_sell, resting, sell
+from tests.support import buy, market_buy, market_sell, new_engine, resting, sell
 
 
 def test_market_order_sweeps_the_book_and_cancels_what_it_cannot_fill() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 5))
     engine.process(sell(101, 5))
 
@@ -45,7 +44,7 @@ def test_market_order_sweeps_the_book_and_cancels_what_it_cannot_fill() -> None:
 
 
 def test_market_order_into_an_empty_book_is_cancelled_in_full() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
 
     events = engine.process(market_sell(7))
 
@@ -57,7 +56,7 @@ def test_market_order_into_an_empty_book_is_cancelled_in_full() -> None:
 
 
 def test_filled_market_order_leaves_no_cancel_and_never_rests() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(buy(100, 10))
 
     events = engine.process(market_sell(4))
@@ -68,7 +67,7 @@ def test_filled_market_order_leaves_no_cancel_and_never_rests() -> None:
 
 
 def test_market_order_trades_at_any_price_on_the_book() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(buy(1, 5))
 
     events = engine.process(market_sell(5))
@@ -79,7 +78,7 @@ def test_market_order_trades_at_any_price_on_the_book() -> None:
 
 @pytest.mark.parametrize("quantity", [0, -1])
 def test_market_order_with_non_positive_quantity_is_rejected(quantity: int) -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 5))
 
     events = engine.process(market_buy(quantity))

@@ -2,52 +2,56 @@
 
 The journal is the engine's write-ahead log. Each command is written and flushed
 before the engine applies it, including commands the engine will reject, because
-a rejected new order still uses up an order ID. Replaying the journal into a
-fresh engine therefore rebuilds the same book, the same IDs and the same events.
+a rejected new order still uses up an order ID. The header records the market
+rules the engine ran under. Replaying the journal into a fresh engine therefore
+rebuilds the same book, the same IDs and the same events.
 
-The file holds one JSON object per line. The first line names the format and its
-version. Every later line is one command, numbered from 1 with no gaps.
+The line format lives in `pricetime.codec`. This module owns the file.
 """
 
-import json
 import logging
 import os
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from types import TracebackType
-from typing import IO, Self, assert_never
+from typing import IO, Self
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.codec import (
+    DecodeError,
+    decode_command,
+    decode_header,
+    encode_command,
+    encode_header,
+)
+from pricetime.commands import Command
 from pricetime.engine import MatchingEngine
 from pricetime.events import Event
-from pricetime.orders import Side
+from pricetime.rules import MarketRules
 
 logger = logging.getLogger(__name__)
 
-FORMAT = "pricetime-journal"
-VERSION = 1
-_HEADER = json.dumps({"format": FORMAT, "version": VERSION}, separators=(",", ":"))
-
-type _Record = dict[str, object]
-
 
 class JournalError(Exception):
-    """The journal is damaged, unreadable, or already closed."""
+    """The journal is damaged, unreadable, mismatched or already closed."""
 
 
 class JournalWriter:
     """Appends commands to a journal file and flushes each one as it is written.
 
     Opening an existing journal reads it end to end first. That checks every
-    record before anything new goes after it, and finds the next sequence
-    number. Existing records are never rewritten.
+    record before anything new goes after it, confirms the journal was written
+    under the same market rules, and finds the next sequence number. Existing
+    records are never rewritten.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._next_sequence = 1 + sum(1 for _ in read_journal(path)) if path.exists() else 1
+    def __init__(self, path: Path, rules: MarketRules) -> None:
+        existing = read_rules(path) if path.exists() else None
+        if existing is not None and existing != rules:
+            raise JournalError(f"{path} was written under different market rules: {existing}")
+        self._next_sequence = 1 + sum(1 for _ in read_journal(path)) if existing is not None else 1
         self._file: IO[str] = path.open("a", encoding="utf-8")
         if self._file.tell() == 0:
-            self._write_line(_HEADER)
+            self._write_line(encode_header(rules))
 
     def __enter__(self) -> Self:
         return self
@@ -72,7 +76,7 @@ class JournalWriter:
         if self._file.closed:
             raise JournalError("journal is closed")
         sequence = self._next_sequence
-        self._write_line(_encode(sequence, command))
+        self._write_line(encode_command(sequence, command))
         self._next_sequence += 1
         return sequence
 
@@ -89,26 +93,37 @@ class JournalWriter:
         self._file.flush()
 
 
+def read_rules(path: Path) -> MarketRules | None:
+    """The market rules in a journal's header, or None for an empty file.
+
+    Raises:
+        JournalError: If the header is damaged or not a header at all.
+    """
+    with path.open(encoding="utf-8") as file:
+        return _header_rules(file.readline())
+
+
 def read_journal(path: Path) -> Iterator[Command]:
     """Yield the commands in a journal in order, checking every record on the way.
 
     An empty file is an empty journal: nothing was ever recorded.
 
     Raises:
-        JournalError: On an unknown header, a malformed record, a gap in the
+        JournalError: On a damaged header, a malformed record, a gap in the
             sequence numbers, or a final record cut off mid-write.
     """
     with path.open(encoding="utf-8") as file:
-        header = file.readline()
-        if not header:
+        if _header_rules(file.readline()) is None:
             return
-        _check_header(header)
         expected = 1
         for line_number, line in enumerate(file, start=2):
             where = f"line {line_number}"
             if not line.endswith("\n"):
                 raise JournalError(f"{where}: incomplete final record, cut off mid-write")
-            sequence, command = _decode(line, where)
+            try:
+                sequence, command = decode_command(line)
+            except DecodeError as error:
+                raise JournalError(f"{where}: {error}") from error
             if sequence != expected:
                 raise JournalError(f"{where}: expected sequence {expected}, found {sequence}")
             expected += 1
@@ -116,8 +131,15 @@ def read_journal(path: Path) -> Iterator[Command]:
 
 
 def replay(path: Path) -> MatchingEngine:
-    """Rebuild an engine by applying every command in a journal, in order."""
-    engine = MatchingEngine()
+    """Rebuild an engine under the journal's rules by applying every command in order.
+
+    Raises:
+        JournalError: If the journal has no header, or is damaged.
+    """
+    rules = read_rules(path)
+    if rules is None:
+        raise JournalError(f"{path} has no header, so there is nothing to replay")
+    engine = MatchingEngine(rules)
     for command in read_journal(path):
         engine.process(command)
     return engine
@@ -126,13 +148,14 @@ def replay(path: Path) -> MatchingEngine:
 class JournaledEngine:
     """A matching engine that records every command in a journal before applying it.
 
-    Opening an existing journal replays it first, so a restarted engine carries
-    on from exactly where the last one stopped. A command that cannot be
-    recorded is not applied, so the engine is never ahead of its journal.
+    Opening an existing journal replays it, so a restarted engine carries on
+    from exactly where the last one stopped. A command that cannot be recorded
+    is not applied, so the engine is never ahead of its journal.
     """
 
-    def __init__(self, path: Path) -> None:
-        self._engine = replay(path) if path.exists() else MatchingEngine()
+    def __init__(self, path: Path, rules: MarketRules) -> None:
+        self._writer = JournalWriter(path, rules)
+        self._engine = replay(path)
         recovered = self._engine.snapshot().sequence
         if recovered:
             logger.info(
@@ -141,7 +164,6 @@ class JournaledEngine:
                 path,
                 extra={"journal": str(path), "commands": recovered},
             )
-        self._writer = JournalWriter(path)
 
     def __enter__(self) -> Self:
         return self
@@ -173,110 +195,12 @@ class JournaledEngine:
         self._writer.close()
 
 
-def _encode(sequence: int, command: Command) -> str:
-    record: _Record
-    match command:
-        case NewLimitOrder():
-            record = {
-                "seq": sequence,
-                "type": "limit",
-                "side": command.side.value,
-                "price": command.price,
-                "quantity": command.quantity,
-            }
-        case NewMarketOrder():
-            record = {
-                "seq": sequence,
-                "type": "market",
-                "side": command.side.value,
-                "quantity": command.quantity,
-            }
-        case CancelOrder():
-            record = {"seq": sequence, "type": "cancel", "order_id": command.order_id}
-        case ModifyOrder():
-            record = {
-                "seq": sequence,
-                "type": "modify",
-                "order_id": command.order_id,
-                "price": command.price,
-                "quantity": command.quantity,
-            }
-        case _:
-            assert_never(command)
-    return json.dumps(record, separators=(",", ":"))
-
-
-def _check_header(line: str) -> None:
+def _header_rules(line: str) -> MarketRules | None:
+    if not line:
+        return None
+    if not line.endswith("\n"):
+        raise JournalError("line 1: incomplete header, cut off mid-write")
     try:
-        header = json.loads(line)
-    except json.JSONDecodeError as error:
-        raise JournalError("line 1: not a pricetime journal") from error
-    if not isinstance(header, dict) or header.get("format") != FORMAT:
-        raise JournalError("line 1: not a pricetime journal")
-    if header.get("version") != VERSION:
-        raise JournalError(f"line 1: unsupported version {header.get('version')!r}")
-
-
-def _decode(line: str, where: str) -> tuple[int, Command]:
-    try:
-        record = json.loads(line)
-    except json.JSONDecodeError as error:
-        raise JournalError(f"{where}: not valid JSON") from error
-    if not isinstance(record, dict):
-        raise JournalError(f"{where}: not a JSON object")
-    kind = record.get("type")
-    if not isinstance(kind, str) or kind not in _DECODERS:
-        raise JournalError(f"{where}: unknown command type {kind!r}")
-    fields, build = _DECODERS[kind]
-    expected = {"seq", "type", *fields}
-    if set(record) != expected:
-        raise JournalError(f"{where}: expected fields {sorted(expected)}, found {sorted(record)}")
-    return _integer(record, "seq", where), build(record, where)
-
-
-def _integer(record: _Record, key: str, where: str) -> int:
-    value = record[key]
-    # bool is a subclass of int in Python, and true is not a quantity.
-    if type(value) is not int:
-        raise JournalError(f"{where}: {key} must be an integer, found {value!r}")
-    return value
-
-
-def _side(record: _Record, where: str) -> Side:
-    value = record["side"]
-    try:
-        return Side(value)
-    except ValueError as error:
-        raise JournalError(f"{where}: side must be 'buy' or 'sell', found {value!r}") from error
-
-
-def _limit(record: _Record, where: str) -> Command:
-    return NewLimitOrder(
-        side=_side(record, where),
-        price=_integer(record, "price", where),
-        quantity=_integer(record, "quantity", where),
-    )
-
-
-def _market(record: _Record, where: str) -> Command:
-    return NewMarketOrder(side=_side(record, where), quantity=_integer(record, "quantity", where))
-
-
-def _cancel(record: _Record, where: str) -> Command:
-    return CancelOrder(order_id=_integer(record, "order_id", where))
-
-
-def _modify(record: _Record, where: str) -> Command:
-    return ModifyOrder(
-        order_id=_integer(record, "order_id", where),
-        price=_integer(record, "price", where),
-        quantity=_integer(record, "quantity", where),
-    )
-
-
-_DECODERS: dict[str, tuple[tuple[str, ...], Callable[[_Record, str], Command]]] = {
-    "limit": (("side", "price", "quantity"), _limit),
-    "market": (("side", "quantity"), _market),
-    "cancel": (("order_id",), _cancel),
-    "modify": (("order_id", "price", "quantity"), _modify),
-}
+        return decode_header(line)
+    except DecodeError as error:
+        raise JournalError(f"line 1: {error}") from error

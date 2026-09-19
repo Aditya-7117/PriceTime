@@ -17,6 +17,7 @@ from pricetime.events import (
     Trade,
 )
 from pricetime.orders import Order, Side
+from pricetime.rules import MarketRules
 from pricetime.snapshot import EngineSnapshot, RestingOrder
 
 
@@ -31,7 +32,8 @@ class MatchingEngine:
     produce the same events and the same book.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, rules: MarketRules) -> None:
+        self._rules = rules
         self._book = OrderBook()
         self._next_order_id = 1
         self._next_trade_id = 1
@@ -71,8 +73,8 @@ class MatchingEngine:
         order_id = self._issue_order_id()
         if command.quantity <= 0:
             return [OrderRejected(order_id=order_id, reason=RejectReason.INVALID_QUANTITY)]
-        if command.price <= 0:
-            return [OrderRejected(order_id=order_id, reason=RejectReason.INVALID_PRICE)]
+        if price_problem := self._price_problem(command.price):
+            return [OrderRejected(order_id=order_id, reason=price_problem)]
         events: list[Event] = [
             OrderAccepted(
                 order_id=order_id,
@@ -139,8 +141,8 @@ class MatchingEngine:
             return [ModifyRejected(order_id=command.order_id, reason=reason)]
         if command.quantity <= 0:
             return [ModifyRejected(order_id=order.order_id, reason=RejectReason.INVALID_QUANTITY)]
-        if command.price <= 0:
-            return [ModifyRejected(order_id=order.order_id, reason=RejectReason.INVALID_PRICE)]
+        if price_problem := self._price_problem(command.price):
+            return [ModifyRejected(order_id=order.order_id, reason=price_problem)]
 
         remaining = command.quantity - order.filled
         if remaining <= 0:
@@ -206,6 +208,15 @@ class MatchingEngine:
                 if not maker.remaining:
                     self._book.remove(maker)
         return quantity
+
+    def _price_problem(self, price: int) -> RejectReason | None:
+        """Why a limit price is unacceptable, or None if it is fine."""
+        if price <= 0:
+            return RejectReason.INVALID_PRICE
+        band = self._rules.price_band
+        if band is not None and not band.contains(price):
+            return RejectReason.PRICE_OUT_OF_BAND
+        return None
 
     def _why_not_resting(self, order_id: int) -> RejectReason:
         """Tell an order that has left the book apart from one that never existed.

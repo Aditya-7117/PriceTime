@@ -1,13 +1,13 @@
 import pytest
 
-from pricetime.engine import MatchingEngine
 from pricetime.events import OrderAccepted, OrderRejected, RejectReason, Trade
 from pricetime.orders import Side
-from tests.support import buy, resting, sell
+from pricetime.rules import MarketRules, PriceBand
+from tests.support import buy, new_engine, resting, sell
 
 
 def test_order_that_does_not_cross_rests_on_the_book() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
 
     events = engine.process(buy(100, 10))
 
@@ -17,7 +17,7 @@ def test_order_that_does_not_cross_rests_on_the_book() -> None:
 
 
 def test_crossing_order_trades_at_the_resting_price() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 10))
 
     events = engine.process(buy(102, 10))
@@ -38,7 +38,7 @@ def test_crossing_order_trades_at_the_resting_price() -> None:
 
 
 def test_unfilled_part_of_an_aggressive_order_rests_at_its_limit() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 5))
 
     engine.process(buy(101, 8))
@@ -50,7 +50,7 @@ def test_unfilled_part_of_an_aggressive_order_rests_at_its_limit() -> None:
 
 
 def test_partially_filled_resting_order_keeps_its_place_at_the_front() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 10))
     engine.process(sell(100, 10))
 
@@ -60,7 +60,7 @@ def test_partially_filled_resting_order_keeps_its_place_at_the_front() -> None:
 
 
 def test_order_sweeps_several_levels_and_rests_the_remainder() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(101, 100))
     engine.process(sell(102, 100))
     engine.process(sell(103, 200))
@@ -77,7 +77,7 @@ def test_order_sweeps_several_levels_and_rests_the_remainder() -> None:
 
 
 def test_sell_sweeps_bids_from_the_highest_price_down() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(buy(99, 10))
     engine.process(buy(100, 10))
 
@@ -90,7 +90,7 @@ def test_sell_sweeps_bids_from_the_highest_price_down() -> None:
 
 
 def test_earlier_order_at_the_same_price_fills_first() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     for _ in range(3):
         engine.process(sell(100, 5))
 
@@ -102,7 +102,7 @@ def test_earlier_order_at_the_same_price_fills_first() -> None:
 
 
 def test_better_price_fills_before_earlier_time() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(101, 5))
     engine.process(sell(100, 5))
 
@@ -113,7 +113,7 @@ def test_better_price_fills_before_earlier_time() -> None:
 
 
 def test_limit_order_never_trades_through_its_limit() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(101, 5))
 
     events = engine.process(buy(100, 5))
@@ -125,7 +125,7 @@ def test_limit_order_never_trades_through_its_limit() -> None:
 
 @pytest.mark.parametrize("quantity", [0, -5])
 def test_non_positive_quantity_is_rejected(quantity: int) -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
 
     events = engine.process(buy(100, quantity))
 
@@ -135,7 +135,7 @@ def test_non_positive_quantity_is_rejected(quantity: int) -> None:
 
 @pytest.mark.parametrize("price", [0, -1])
 def test_non_positive_price_is_rejected(price: int) -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
 
     events = engine.process(sell(price, 10))
 
@@ -144,7 +144,7 @@ def test_non_positive_price_is_rejected(price: int) -> None:
 
 
 def test_every_new_order_gets_the_next_id_even_when_rejected() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
 
     first = engine.process(buy(100, 0))
     second = engine.process(buy(100, 10))
@@ -154,7 +154,7 @@ def test_every_new_order_gets_the_next_id_even_when_rejected() -> None:
 
 
 def test_trade_ids_count_up_across_orders() -> None:
-    engine = MatchingEngine()
+    engine = new_engine()
     engine.process(sell(100, 5))
     engine.process(sell(101, 5))
 
@@ -163,3 +163,22 @@ def test_trade_ids_count_up_across_orders() -> None:
 
     trade_ids = [e.trade_id for e in first + second if isinstance(e, Trade)]
     assert trade_ids == [1, 2]
+
+
+@pytest.mark.parametrize("price", [89, 111])
+def test_order_priced_outside_the_daily_band_is_rejected(price: int) -> None:
+    engine = new_engine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+
+    events = engine.process(buy(price, 10))
+
+    assert events == [OrderRejected(order_id=1, reason=RejectReason.PRICE_OUT_OF_BAND)]
+    assert len(engine.book) == 0
+
+
+@pytest.mark.parametrize("price", [90, 110])
+def test_orders_at_the_band_limits_are_accepted(price: int) -> None:
+    engine = new_engine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+
+    events = engine.process(sell(price, 10))
+
+    assert events == [OrderAccepted(order_id=1, side=Side.SELL, price=price, quantity=10)]

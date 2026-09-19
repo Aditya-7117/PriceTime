@@ -22,6 +22,8 @@ Two questions: what goes in the log, and does it get written before or after the
   file.
 - **Recover by replay.** Opening a journaled engine on an existing journal replays it, then keeps
   appending.
+- **The header records the market rules** the engine ran under, so replay enforces exactly the
+  same rules. Reopening a journal under different rules is refused.
 
 ## Consequences
 
