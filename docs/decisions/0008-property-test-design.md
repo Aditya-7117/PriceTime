@@ -28,6 +28,12 @@ the independence of its checks.
 Three more properties sit beside the brief's four: trades follow price-time priority, a modify keeps
 its place only when it shrinks in place, and the levels, queue links and ID index always agree.
 
+**A second, naive implementation as an oracle.** `tests/reference.py` implements the same rules as
+plainly as possible: every resting order in one flat list, and the other side sorted from scratch
+at every step of a match. No linked lists, no index, no sorted levels. The differential test runs
+both on the same generated command sequences and requires identical events and identical state
+after every command. Six planted bugs were each caught by the differential test on its own.
+
 ## Consequences
 
 The mutation check was a one-off run, not part of CI. A mutation testing tool would make it

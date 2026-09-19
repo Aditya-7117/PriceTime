@@ -110,6 +110,10 @@ every command of every generated command sequence:
 | The last traded price is the latest trade | It always equals the price of the most recent trade, or the opening price before any |
 | No client trades with itself | Every trade's two orders belong to different clients |
 
+A second, deliberately naive implementation of the same rules (one flat list of orders, the other
+side sorted from scratch at every step) acts as an oracle: on every generated sequence, the engine
+must produce exactly the same events and the same state after every command.
+
 The generator follows the order IDs it has issued, so cancels and modifies mostly hit live orders.
 To check that the tests can fail, twenty-six deliberate bugs were planted in the engine one at a
 time, twelve in the core matching and fourteen in the NSE rules; the property suite caught every
