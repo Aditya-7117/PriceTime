@@ -24,8 +24,10 @@ class EngineSnapshot:
     """Everything that determines how the engine will respond to its next command.
 
     Each side lists its orders in priority order: best price first, and within a
-    price, earliest first. Two engines with equal snapshots respond identically
-    to any future command, which is the property replay is checked against.
+    price, earliest first. The last traded price is state too, because it sets
+    the protection band for the next market order. Two engines with equal
+    snapshots respond identically to any future command, which is the property
+    replay is checked against.
     """
 
     bids: tuple[RestingOrder, ...]
@@ -33,6 +35,7 @@ class EngineSnapshot:
     next_order_id: int
     next_trade_id: int
     sequence: int
+    last_trade_price: int | None
 
     def digest(self) -> str:
         """A SHA-256 fingerprint of the full state, including queue order.
@@ -47,6 +50,7 @@ class EngineSnapshot:
             "next_order_id": self.next_order_id,
             "next_trade_id": self.next_trade_id,
             "sequence": self.sequence,
+            "last_trade_price": self.last_trade_price,
         }
         canonical = json.dumps(state, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode()).hexdigest()

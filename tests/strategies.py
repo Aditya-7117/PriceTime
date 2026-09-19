@@ -34,7 +34,15 @@ price_bands = st.builds(
     lower=st.integers(min_value=93, max_value=97),
     upper=st.integers(min_value=103, max_value=107),
 )
-market_rules = st.builds(MarketRules, price_band=st.none() | price_bands)
+# Narrow and wide protection bands, a minimum width that sometimes dominates, and sessions
+# that open with or without a last traded price.
+market_rules = st.builds(
+    MarketRules,
+    price_band=st.none() | price_bands,
+    protection_bps=st.sampled_from([100, 300, 1_000]),
+    protection_min_ticks=st.sampled_from([0, 1, 3]),
+    opening_price=st.none() | st.integers(min_value=98, max_value=102),
+)
 
 # Weights by repetition. Shrinking moves towards the start of the list, so a
 # failing sequence shrinks towards plain limit orders.
@@ -77,7 +85,9 @@ def command_sequences(draw: st.DrawFn, max_size: int = 100) -> list[Command]:
             )
             limits[next_order_id] = (side, price, quantity)
         elif kind == "market":
-            commands.append(NewMarketOrder(side=side, quantity=draw(QUANTITIES)))
+            commands.append(
+                NewMarketOrder(side=side, quantity=draw(QUANTITIES), validity=draw(VALIDITIES))
+            )
         else:
             bad_price = draw(st.booleans())
             price = draw(INVALID_VALUES) if bad_price else draw(prices_for(side))

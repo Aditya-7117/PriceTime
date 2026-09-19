@@ -1,6 +1,7 @@
 """Shorthand for building commands and reading engine state in tests."""
 
 import random
+from dataclasses import replace
 
 from pricetime.commands import (
     CancelOrder,
@@ -12,12 +13,20 @@ from pricetime.commands import (
 )
 from pricetime.engine import MatchingEngine
 from pricetime.orders import Side
-from pricetime.rules import MarketRules
+from pricetime.rules import MarketRules, PriceBand
+
+# No price band, a last traded price of 100 so market orders are accepted at once, and a
+# 10% protection band wide enough to stay out of the way of tests about something else.
+DEFAULT_RULES = MarketRules(protection_bps=1_000, protection_min_ticks=1, opening_price=100)
 
 
-def new_engine(rules: MarketRules | None = None) -> MatchingEngine:
-    """An engine with the given rules, or with no price band."""
-    return MatchingEngine(MarketRules() if rules is None else rules)
+def new_engine(rules: MarketRules = DEFAULT_RULES) -> MatchingEngine:
+    return MatchingEngine(rules)
+
+
+def banded(lower: int, upper: int) -> MarketRules:
+    """The default rules with a daily price band."""
+    return replace(DEFAULT_RULES, price_band=PriceBand(lower=lower, upper=upper))
 
 
 def buy(price: int, quantity: int, *, validity: Validity = Validity.DAY) -> NewLimitOrder:
@@ -28,12 +37,12 @@ def sell(price: int, quantity: int, *, validity: Validity = Validity.DAY) -> New
     return NewLimitOrder(side=Side.SELL, price=price, quantity=quantity, validity=validity)
 
 
-def market_buy(quantity: int) -> NewMarketOrder:
-    return NewMarketOrder(side=Side.BUY, quantity=quantity)
+def market_buy(quantity: int, *, validity: Validity = Validity.DAY) -> NewMarketOrder:
+    return NewMarketOrder(side=Side.BUY, quantity=quantity, validity=validity)
 
 
-def market_sell(quantity: int) -> NewMarketOrder:
-    return NewMarketOrder(side=Side.SELL, quantity=quantity)
+def market_sell(quantity: int, *, validity: Validity = Validity.DAY) -> NewMarketOrder:
+    return NewMarketOrder(side=Side.SELL, quantity=quantity, validity=validity)
 
 
 def resting(engine: MatchingEngine, side: Side) -> list[tuple[int, int, int]]:

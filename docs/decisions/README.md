@@ -8,7 +8,7 @@ A record that a later one replaces is marked `superseded`, and it says by which.
 | [1](0001-toolchain-and-ci.md) | Toolchain and continuous integration |
 | [2](0002-commands-in-events-out.md) | Commands in, events out, one command at a time |
 | [3](0003-no-clock-in-the-engine.md) | No clock in the engine: time priority is command order |
-| [4](0004-market-orders-cancel-the-remainder.md) | Market orders cancel whatever they cannot fill |
+| [4](0004-market-orders-cancel-the-remainder.md) | Market orders cancel whatever they cannot fill (superseded by 15) |
 | [5](0005-modify-uses-fix-total-quantity.md) | Modify takes a new total quantity and keeps priority only when shrinking |
 | [6](0006-rejections-are-events.md) | Rejections are events; exceptions are for bugs and I/O |
 | [7](0007-write-ahead-journal.md) | The journal is a write-ahead log of commands |
@@ -19,3 +19,4 @@ A record that a later one replaces is marked `superseded`, and it says by which.
 | [12](0012-price-level-structures.md) | Price level structures, pending measurement |
 | [13](0013-market-rules-and-price-bands.md) | Market rules per engine, starting with the daily price band |
 | [14](0014-day-and-ioc-validity.md) | DAY and IOC validity |
+| [15](0015-market-price-protection.md) | Market orders follow NSE's market price protection |

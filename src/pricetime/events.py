@@ -23,6 +23,9 @@ class RejectReason(enum.Enum):
     PRICE_OUT_OF_BAND = "price_out_of_band"
     """Price was outside the day's price band."""
 
+    NO_LAST_TRADE_PRICE = "no_last_trade_price"
+    """A market order arrived before the session's first trade, so it has no protection band."""
+
     UNKNOWN_ORDER = "unknown_order"
     """No order with this ID was ever issued."""
 
@@ -36,8 +39,8 @@ class CancelReason(enum.Enum):
     REQUESTED = "requested"
     """The owner asked for it."""
 
-    NO_LIQUIDITY = "no_liquidity"
-    """A market order ran out of orders to trade against."""
+    PRICE_PROTECTION = "price_protection"
+    """A market order reached the edge of its protection band with orders still beyond it."""
 
     UNFILLED_IOC = "unfilled_ioc"
     """An immediate-or-cancel order could not fill completely at once."""
@@ -94,6 +97,20 @@ class CancelRejected:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
+class MarketOrderConverted:
+    """A DAY market order ran out of orders to trade against inside its band, and now rests.
+
+    It rests as a limit order at `price`: the best price on its own side of the
+    book, or the last traded price if that side is empty. NSE calls this
+    passivating the order.
+    """
+
+    order_id: int
+    price: int
+    remaining: int
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
 class OrderModified:
     """A modify was applied.
 
@@ -123,6 +140,7 @@ type Event = (
     | OrderRejected
     | Trade
     | OrderCancelled
+    | MarketOrderConverted
     | OrderModified
     | CancelRejected
     | ModifyRejected

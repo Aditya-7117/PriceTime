@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -29,9 +30,18 @@ from pricetime.rules import MarketRules, PriceBand
 from tests.strategies import command_sequences, market_rules
 from tests.support import buy, new_engine, random_commands, sell
 
-RULES = MarketRules(price_band=PriceBand(lower=90, upper=110))
+RULES = MarketRules(
+    price_band=PriceBand(lower=90, upper=110),
+    protection_bps=500,
+    protection_min_ticks=2,
+    opening_price=100,
+)
 HEADER = (
-    '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":90,"upper":110}}}\n'
+    '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":90,"upper":110},'
+    '"protection_bps":500,"protection_min_ticks":2,"opening_price":100}}\n'
+)
+NO_BAND = (
+    '"rules":{"price_band":null,"protection_bps":500,"protection_min_ticks":2,"opening_price":null}'
 )
 
 EVERY_KIND: list[Command] = [
@@ -92,13 +102,13 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
     ("content", "problem"),
     [
         pytest.param(
-            '{"format":"other","version":1,"rules":{"price_band":null}}\n',
+            '{"format":"other","version":1,' + NO_BAND + "}\n",
             "not a pricetime journal",
             id="format",
         ),
         pytest.param('{"format":"pricet', "line 1: incomplete header", id="torn header"),
         pytest.param(
-            '{"format":"pricetime-journal","version":2,"rules":{"price_band":null}}\n',
+            '{"format":"pricetime-journal","version":2,' + NO_BAND + "}\n",
             "unsupported version",
             id="version",
         ),
@@ -106,13 +116,14 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
             '{"format":"pricetime-journal","version":1}\n', "line 1: market rules", id="no rules"
         ),
         pytest.param(
-            '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":9}}}\n',
+            '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":9},'
+            '"protection_bps":500,"protection_min_ticks":2,"opening_price":null}}\n',
             "line 1: market rules",
             id="bad band",
         ),
         pytest.param(
-            '{"format":"pricetime-journal","version":1,'
-            '"rules":{"price_band":{"lower":20,"upper":10}}}\n',
+            '{"format":"pricetime-journal","version":1,"rules":{"price_band":{"lower":20,"upper":10},'
+            '"protection_bps":500,"protection_min_ticks":2,"opening_price":null}}\n',
             "line 1: market rules",
             id="inverted band",
         ),
@@ -138,7 +149,7 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
             id="string price",
         ),
         pytest.param(
-            HEADER + '{"seq":1,"type":"market","side":"buy","quantity":true}\n',
+            HEADER + '{"seq":1,"type":"market","side":"buy","quantity":true,"validity":"day"}\n',
             "line 2: quantity must be an integer",
             id="boolean quantity",
         ),
@@ -149,7 +160,7 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
             id="validity",
         ),
         pytest.param(
-            HEADER + '{"seq":1,"type":"market","side":"up","quantity":1}\n',
+            HEADER + '{"seq":1,"type":"market","side":"up","quantity":1,"validity":"day"}\n',
             "line 2: side must be",
             id="side",
         ),
@@ -292,7 +303,7 @@ def test_reopening_a_journal_under_different_rules_is_refused(tmp_path: Path) ->
     write(path, [buy(100, 5)])
 
     with pytest.raises(JournalError, match="different market rules"):
-        JournaledEngine(path, MarketRules())
+        JournaledEngine(path, replace(RULES, opening_price=101))
 
     assert list(read_journal(path)) == [buy(100, 5)]
 

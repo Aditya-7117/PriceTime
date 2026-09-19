@@ -4,8 +4,7 @@ from pricetime.commands import ModifyOrder
 from pricetime.engine import MatchingEngine
 from pricetime.events import ModifyRejected, OrderModified, RejectReason, Trade
 from pricetime.orders import Side
-from pricetime.rules import MarketRules, PriceBand
-from tests.support import buy, new_engine, resting, sell
+from tests.support import banded, buy, new_engine, resting, sell
 
 
 def priorities(engine: MatchingEngine) -> dict[int, int]:
@@ -184,7 +183,7 @@ def test_invalid_modify_is_rejected_and_leaves_the_order_unchanged(
 
 
 def test_modify_to_a_price_outside_the_band_is_rejected_and_changes_nothing() -> None:
-    engine = new_engine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+    engine = new_engine(banded(90, 110))
     engine.process(buy(100, 10))
 
     events = engine.process(ModifyOrder(order_id=1, price=111, quantity=10))

@@ -5,15 +5,21 @@ resting buy and sell order and executes trades the moment the two sides cross, u
 priority. Every command is journaled before it is applied, and replaying the journal rebuilds the
 identical book.
 
-Written in Python. Correctness and measurement come before raw speed.
+Written in Python. Correctness and measurement come before raw speed. Where an exchange's rules
+matter, it follows those the National Stock Exchange of India (NSE) publishes: daily price bands,
+DAY and IOC validity, and market price protection.
 
 ## What works today
 
-- Limit and market orders, cancel and modify, under price-time priority.
+- Limit and market orders, cancel and modify, under price-time priority, with DAY and IOC
+  validity.
+- NSE's market price protection: a market order trades no further than a set percentage from the
+  last traded price.
+- A daily price band per instrument, and exact conversion of decimal prices to integer ticks.
 - Price levels as first-in, first-out queues built from intrusive linked lists, and an index from
   order ID to order, so a cancel is a dictionary lookup and an unlink rather than a scan.
 - An append-only, write-ahead journal of every command, with replay and crash recovery.
-- Property-based tests that check seven invariants after every command of generated command
+- Property-based tests that check eleven invariants after every command of generated command
   sequences.
 
 Not built yet: the FIX 4.4 session layer and the latency benchmark. See [Limitations](#limitations).
@@ -51,8 +57,14 @@ flowchart LR
 
 An incoming order walks the opposite side of the book from the best price, and each price level
 from its oldest order, trading until it is filled or the next price is beyond its limit. Each trade
-happens at the resting order's price, so any price improvement goes to the incoming order. A limit
-order rests whatever it cannot fill. A market order cancels it.
+happens at the resting order's price, so any price improvement goes to the incoming order. A DAY
+limit order rests whatever it cannot fill; an IOC order cancels it.
+
+A market order follows NSE's market price protection (circular 155/2022). It is rejected until the
+session's first trade. It trades no further than X% from the last traded price. If orders remain
+beyond that band, its remainder is cancelled. Otherwise the other side of the book is empty, and a
+DAY market order rests as a limit order at the best price on its own side, or at the last traded
+price.
 
 The engine takes one command at a time and returns the list of events it caused. It calls nothing
 while matching, so no outside code can re-enter it mid-match. It reads no clock and no randomness:
@@ -86,10 +98,14 @@ every command of every generated command sequence:
 | Trades follow price-time priority | An incoming order trades with a prefix of the opposite side in priority order, and stops only when it must |
 | A modify keeps its place only when shrinking in place | Otherwise the order is last at its new price, or gone |
 | The structure is consistent | Level order, queue links, level totals and the ID index agree |
+| Nothing rests outside the price band | Every resting order's price is inside the day's band |
+| An IOC order never rests | After its command, no IOC order is on the book |
+| Market orders follow market price protection | A remainder is cancelled for protection only if orders lie beyond the band; otherwise IOC cancels and DAY rests at the price the circular names |
+| The last traded price is the latest trade | It always equals the price of the most recent trade, or the opening price before any |
 
 The generator follows the order IDs it has issued, so cancels and modifies mostly hit live orders.
-To check that the tests can fail, twelve deliberate bugs were planted in the engine one at a time;
-the property suite caught every one. Details are in
+To check that the tests can fail, twenty deliberate bugs were planted in the engine one at a time,
+twelve in the core matching and eight in the NSE rules; the property suite caught every one. Details are in
 [decision 8](docs/decisions/0008-property-test-design.md).
 
 ## Quick start
@@ -121,7 +137,13 @@ from pricetime.events import Trade
 from pricetime.orders import Side
 from pricetime.rules import MarketRules, PriceBand
 
-engine = MatchingEngine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+rules = MarketRules(
+    price_band=PriceBand(lower=90, upper=110),
+    protection_bps=500,  # market orders may trade up to 5% from the last traded price
+    protection_min_ticks=2,
+    opening_price=100,
+)
+engine = MatchingEngine(rules)
 engine.process(NewLimitOrder(side=Side.SELL, price=101, quantity=100))
 engine.process(NewLimitOrder(side=Side.SELL, price=102, quantity=100))
 
@@ -135,7 +157,8 @@ assert engine.book.best_ask() is None
 
 Prices are integer ticks: at a ₹0.05 tick, ₹2450.35 is 49007. `pricetime.prices` converts decimal
 strings to ticks exactly and refuses a price off the tick grid. Order IDs are issued by the engine,
-starting at 1. An order priced outside the day's band is rejected.
+starting at 1. An order priced outside the day's band is rejected. The protection percentage in the
+example is illustrative; NSE sets its value by separate notice.
 
 ## Decisions
 
@@ -150,8 +173,8 @@ options, what was chosen and what it costs.
 - **One instrument per engine.** There is no symbol on a command.
 - **No self-match prevention.** Two orders from the same owner can trade with each other, because
   orders carry no owner yet.
-- **Limit and market orders only.** No stop orders, no immediate-or-cancel or fill-or-kill limit
-  orders, no hidden or iceberg quantity.
+- **Limit and market orders only.** No stop-loss orders, no fill-or-kill, no disclosed (iceberg)
+  quantity, and no pre-open call auction.
 - **Restart replays the whole journal.** There are no snapshots, so recovery time grows with the
   journal's length.
 - **A torn final journal record stops recovery.** It is reported, not repaired.

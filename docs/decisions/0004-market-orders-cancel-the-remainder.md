@@ -1,6 +1,6 @@
 # 4. Market orders cancel whatever they cannot fill
 
-Date: 19 September 2026. Status: accepted.
+Date: 19 September 2026. Status: superseded by [decision 15](0015-market-price-protection.md).
 
 ## Context
 

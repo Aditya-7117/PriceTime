@@ -36,6 +36,9 @@ def encode_header(rules: MarketRules) -> str:
     band = rules.price_band
     encoded_rules = {
         "price_band": None if band is None else {"lower": band.lower, "upper": band.upper},
+        "protection_bps": rules.protection_bps,
+        "protection_min_ticks": rules.protection_min_ticks,
+        "opening_price": rules.opening_price,
     }
     return _dumps({"format": FORMAT, "version": VERSION, "rules": encoded_rules})
 
@@ -78,6 +81,7 @@ def encode_command(sequence: int, command: Command) -> str:
                 "type": "market",
                 "side": command.side.value,
                 "quantity": command.quantity,
+                "validity": command.validity.value,
             }
         case CancelOrder():
             record = {"seq": sequence, "type": "cancel", "order_id": command.order_id}
@@ -120,20 +124,31 @@ def _dumps(value: _Record) -> str:
     return json.dumps(value, separators=(",", ":"))
 
 
+_RULE_FIELDS = {"price_band", "protection_bps", "protection_min_ticks", "opening_price"}
+
+
 def _decode_rules(value: object) -> MarketRules:
-    if not isinstance(value, dict) or set(value) != {"price_band"}:
-        raise DecodeError(f"market rules must hold exactly price_band, found {value!r}")
-    band = value["price_band"]
-    if band is None:
-        return MarketRules()
-    if not isinstance(band, dict) or set(band) != {"lower", "upper"}:
-        raise DecodeError(f"market rules: price_band needs lower and upper, found {band!r}")
+    if not isinstance(value, dict) or set(value) != _RULE_FIELDS:
+        raise DecodeError(f"market rules must hold exactly {sorted(_RULE_FIELDS)}, found {value!r}")
     try:
         return MarketRules(
-            price_band=PriceBand(lower=_integer(band, "lower"), upper=_integer(band, "upper"))
+            price_band=_price_band(value["price_band"]),
+            protection_bps=_integer(value, "protection_bps"),
+            protection_min_ticks=_integer(value, "protection_min_ticks"),
+            opening_price=None
+            if value["opening_price"] is None
+            else _integer(value, "opening_price"),
         )
     except ValueError as error:
         raise DecodeError(f"market rules: {error}") from error
+
+
+def _price_band(value: object) -> PriceBand | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"lower", "upper"}:
+        raise DecodeError(f"price_band needs lower and upper, found {value!r}")
+    return PriceBand(lower=_integer(value, "lower"), upper=_integer(value, "upper"))
 
 
 def _integer(record: _Record, key: str) -> int:
@@ -170,7 +185,11 @@ def _limit(record: _Record) -> Command:
 
 
 def _market(record: _Record) -> Command:
-    return NewMarketOrder(side=_side(record), quantity=_integer(record, "quantity"))
+    return NewMarketOrder(
+        side=_side(record),
+        quantity=_integer(record, "quantity"),
+        validity=_validity(record),
+    )
 
 
 def _cancel(record: _Record) -> Command:
@@ -187,7 +206,7 @@ def _modify(record: _Record) -> Command:
 
 _DECODERS: dict[str, tuple[tuple[str, ...], Callable[[_Record], Command]]] = {
     "limit": (("side", "price", "quantity", "validity"), _limit),
-    "market": (("side", "quantity"), _market),
+    "market": (("side", "quantity", "validity"), _market),
     "cancel": (("order_id",), _cancel),
     "modify": (("order_id", "price", "quantity"), _modify),
 }

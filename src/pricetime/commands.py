@@ -37,10 +37,16 @@ class NewLimitOrder:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NewMarketOrder:
-    """Buy or sell `quantity` at any price; cancel whatever the book cannot fill."""
+    """Buy or sell `quantity` at the best prices available, within the protection band.
+
+    It trades no further from the last traded price than the market rules
+    allow. What it cannot fill is cancelled if orders remain beyond the band, or
+    if it is IOC. Otherwise a DAY market order rests as a limit order.
+    """
 
     side: Side
     quantity: int
+    validity: Validity = Validity.DAY
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

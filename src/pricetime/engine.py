@@ -15,6 +15,7 @@ from pricetime.events import (
     CancelReason,
     CancelRejected,
     Event,
+    MarketOrderConverted,
     ModifyRejected,
     OrderAccepted,
     OrderCancelled,
@@ -29,14 +30,14 @@ from pricetime.snapshot import EngineSnapshot, RestingOrder
 
 
 class MatchingEngine:
-    """A single-instrument matching engine.
+    """A single-instrument matching engine for one trading session.
 
     Commands are processed one at a time, to completion, in the order they are
     given. Each call to `process` returns the events that command caused and
     calls nothing else, so no outside code can run, or re-enter the engine, in
     the middle of a match. The engine reads no clock and no randomness: time
-    priority comes from the order of commands, so the same commands always
-    produce the same events and the same book.
+    priority comes from the order of commands, so the same rules and the same
+    commands always produce the same events and the same book.
     """
 
     def __init__(self, rules: MarketRules) -> None:
@@ -45,6 +46,7 @@ class MatchingEngine:
         self._next_order_id = 1
         self._next_trade_id = 1
         self._sequence = 0
+        self._last_trade_price = rules.opening_price
 
     @property
     def book(self) -> OrderBook:
@@ -74,6 +76,7 @@ class MatchingEngine:
             next_order_id=self._next_order_id,
             next_trade_id=self._next_trade_id,
             sequence=self._sequence,
+            last_trade_price=self._last_trade_price,
         )
 
     def _new_limit(self, command: NewLimitOrder) -> list[Event]:
@@ -90,32 +93,31 @@ class MatchingEngine:
                 quantity=command.quantity,
             )
         ]
-        unfilled = self._sweep(events, order_id, command.side, command.price, command.quantity)
-        if unfilled and command.validity is Validity.IOC:
-            events.append(
-                OrderCancelled(
-                    order_id=order_id,
-                    quantity=unfilled,
-                    reason=CancelReason.UNFILLED_IOC,
-                )
-            )
-        elif unfilled:
-            self._book.add(
-                Order(
-                    order_id=order_id,
-                    side=command.side,
-                    price=command.price,
-                    remaining=unfilled,
-                    filled=command.quantity - unfilled,
-                    priority=self._sequence,
-                )
-            )
+        order = self._incoming(order_id, command.side, command.price, command.quantity)
+        self._sweep(events, order)
+        if not order.remaining:
+            return events
+        if command.validity is Validity.IOC:
+            events.append(_cancelled(order, CancelReason.UNFILLED_IOC))
+        else:
+            self._book.add(order)
         return events
 
     def _new_market(self, command: NewMarketOrder) -> list[Event]:
+        """Trade within the protection band, then cancel or rest what is left.
+
+        Follows NSE's market price protection (circular 155/2022). The band is
+        set from the last traded price when the order arrives. Whatever the
+        order cannot fill inside it is cancelled if orders remain beyond the
+        band, or if the order is IOC. Otherwise the other side of the book is
+        empty, and a DAY order rests as a limit order at the best price on its
+        own side, or at the last traded price if its own side is empty too.
+        """
         order_id = self._issue_order_id()
         if command.quantity <= 0:
             return [OrderRejected(order_id=order_id, reason=RejectReason.INVALID_QUANTITY)]
+        if self._last_trade_price is None:
+            return [OrderRejected(order_id=order_id, reason=RejectReason.NO_LAST_TRADE_PRICE)]
         events: list[Event] = [
             OrderAccepted(
                 order_id=order_id,
@@ -124,13 +126,24 @@ class MatchingEngine:
                 quantity=command.quantity,
             )
         ]
-        unfilled = self._sweep(events, order_id, command.side, None, command.quantity)
-        if unfilled:
+        limit = self._rules.protection_limit(command.side, self._last_trade_price)
+        order = self._incoming(order_id, command.side, limit, command.quantity)
+        self._sweep(events, order)
+        if not order.remaining:
+            return events
+        if self._book.side(command.side.opposite).best() is not None:
+            events.append(_cancelled(order, CancelReason.PRICE_PROTECTION))
+        elif command.validity is Validity.IOC:
+            events.append(_cancelled(order, CancelReason.UNFILLED_IOC))
+        else:
+            own_best = self._book.side(command.side).best()
+            order.price = own_best.price if own_best is not None else self._last_trade_price
+            self._book.add(order)
             events.append(
-                OrderCancelled(
+                MarketOrderConverted(
                     order_id=order_id,
-                    quantity=unfilled,
-                    reason=CancelReason.NO_LIQUIDITY,
+                    price=order.price,
+                    remaining=order.remaining,
                 )
             )
         return events
@@ -141,13 +154,7 @@ class MatchingEngine:
             reason = self._why_not_resting(command.order_id)
             return [CancelRejected(order_id=command.order_id, reason=reason)]
         self._book.remove(order)
-        return [
-            OrderCancelled(
-                order_id=order.order_id,
-                quantity=order.remaining,
-                reason=CancelReason.REQUESTED,
-            )
-        ]
+        return [_cancelled(order, CancelReason.REQUESTED)]
 
     def _modify(self, command: ModifyOrder) -> list[Event]:
         order = self._book.get(command.order_id)
@@ -172,57 +179,61 @@ class MatchingEngine:
         # new order would, and trades first if the new price crosses the spread.
         self._book.remove(order)
         events: list[Event] = [_modified(command, remaining=remaining, kept_priority=False)]
-        unfilled = self._sweep(events, order.order_id, order.side, command.price, remaining)
-        order.filled += remaining - unfilled
-        if unfilled:
-            order.price = command.price
-            order.remaining = unfilled
-            order.priority = self._sequence
+        order.price = command.price
+        order.remaining = remaining
+        order.priority = self._sequence
+        self._sweep(events, order)
+        if order.remaining:
             self._book.add(order)
         return events
 
-    def _sweep(
-        self,
-        events: list[Event],
-        taker_id: int,
-        side: Side,
-        limit: int | None,
-        quantity: int,
-    ) -> int:
+    def _sweep(self, events: list[Event], taker: Order) -> None:
         """Trade an incoming order against the opposite side of the book.
 
         Walks the opposite side from the best price, and each level from its
         oldest order, until the incoming order is filled or the next price is
-        beyond its limit. A limit of None means any price. Makers that fill
-        completely leave the book as they go. Returns the quantity left unfilled.
+        beyond the incoming order's price. Every trade is at the resting order's
+        price and moves the last traded price. Resting orders that fill leave the
+        book as they go. The incoming order's own quantities are updated in place.
         """
-        opposite = self._book.side(side.opposite)
-        buying = side is Side.BUY
-        while quantity:
+        opposite = self._book.side(taker.side.opposite)
+        buying = taker.side is Side.BUY
+        while taker.remaining:
             level = opposite.best()
-            if level is None:
-                break
-            if limit is not None and (level.price > limit if buying else level.price < limit):
-                break
-            while quantity and (maker := level.head) is not None:
-                traded = min(quantity, maker.remaining)
+            if level is None or (
+                level.price > taker.price if buying else level.price < taker.price
+            ):
+                return
+            while taker.remaining and (maker := level.head) is not None:
+                traded = min(taker.remaining, maker.remaining)
                 level.reduce(maker, traded)
                 maker.filled += traded
-                quantity -= traded
+                taker.remaining -= traded
+                taker.filled += traded
+                self._last_trade_price = level.price
                 events.append(
                     Trade(
                         trade_id=self._next_trade_id,
                         price=level.price,
                         quantity=traded,
                         maker_order_id=maker.order_id,
-                        taker_order_id=taker_id,
-                        aggressor=side,
+                        taker_order_id=taker.order_id,
+                        aggressor=taker.side,
                     )
                 )
                 self._next_trade_id += 1
                 if not maker.remaining:
                     self._book.remove(maker)
-        return quantity
+
+    def _incoming(self, order_id: int, side: Side, price: int, quantity: int) -> Order:
+        """A new order, not yet on the book, with this command's time priority."""
+        return Order(
+            order_id=order_id,
+            side=side,
+            price=price,
+            remaining=quantity,
+            priority=self._sequence,
+        )
 
     def _price_problem(self, price: int) -> RejectReason | None:
         """Why a limit price is unacceptable, or None if it is fine."""
@@ -248,6 +259,10 @@ class MatchingEngine:
         order_id = self._next_order_id
         self._next_order_id += 1
         return order_id
+
+
+def _cancelled(order: Order, reason: CancelReason) -> OrderCancelled:
+    return OrderCancelled(order_id=order.order_id, quantity=order.remaining, reason=reason)
 
 
 def _modified(command: ModifyOrder, *, remaining: int, kept_priority: bool) -> OrderModified:

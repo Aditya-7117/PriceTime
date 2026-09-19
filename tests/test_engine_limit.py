@@ -2,8 +2,7 @@ import pytest
 
 from pricetime.events import OrderAccepted, OrderRejected, RejectReason, Trade
 from pricetime.orders import Side
-from pricetime.rules import MarketRules, PriceBand
-from tests.support import buy, new_engine, resting, sell
+from tests.support import banded, buy, new_engine, resting, sell
 
 
 def test_order_that_does_not_cross_rests_on_the_book() -> None:
@@ -167,7 +166,7 @@ def test_trade_ids_count_up_across_orders() -> None:
 
 @pytest.mark.parametrize("price", [89, 111])
 def test_order_priced_outside_the_daily_band_is_rejected(price: int) -> None:
-    engine = new_engine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+    engine = new_engine(banded(90, 110))
 
     events = engine.process(buy(price, 10))
 
@@ -177,7 +176,7 @@ def test_order_priced_outside_the_daily_band_is_rejected(price: int) -> None:
 
 @pytest.mark.parametrize("price", [90, 110])
 def test_orders_at_the_band_limits_are_accepted(price: int) -> None:
-    engine = new_engine(MarketRules(price_band=PriceBand(lower=90, upper=110)))
+    engine = new_engine(banded(90, 110))
 
     events = engine.process(sell(price, 10))
 

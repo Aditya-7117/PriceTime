@@ -3,11 +3,13 @@
 from itertools import pairwise
 
 from pricetime.book import BookSide
-from pricetime.commands import Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import Command, ModifyOrder, NewLimitOrder, NewMarketOrder, Validity
 from pricetime.engine import MatchingEngine
 from pricetime.events import (
+    CancelReason,
     CancelRejected,
     Event,
+    MarketOrderConverted,
     ModifyRejected,
     OrderAccepted,
     OrderCancelled,
@@ -111,6 +113,8 @@ class Ledger:
                     expected = max(0, command.quantity - self.filled[event.order_id])
                     assert event.remaining == expected
                     self.open[event.order_id] = event.remaining
+                case MarketOrderConverted():
+                    assert event.remaining == self.open[event.order_id] > 0
                 case OrderRejected() | CancelRejected() | ModifyRejected():
                     pass
 
@@ -123,7 +127,7 @@ class Ledger:
 
 
 def check_price_time_priority(
-    before: EngineSnapshot, command: Command, events: list[Event]
+    before: EngineSnapshot, command: Command, events: list[Event], rules: MarketRules
 ) -> None:
     """Trades took the opposite side strictly in priority order, and stopped only when they had to.
 
@@ -134,7 +138,7 @@ def check_price_time_priority(
     the next maker in line must be beyond its limit, or there must be none.
     """
     trades = [event for event in events if isinstance(event, Trade)]
-    incoming = _incoming_order(before, command, events)
+    incoming = _incoming_order(before, command, events, rules)
     if incoming is None:
         assert not trades, "trades from a command that does not take liquidity"
         return
@@ -161,8 +165,8 @@ def check_price_time_priority(
 
 
 def _incoming_order(
-    before: EngineSnapshot, command: Command, events: list[Event]
-) -> tuple[Side, int | None, int] | None:
+    before: EngineSnapshot, command: Command, events: list[Event], rules: MarketRules
+) -> tuple[Side, int, int] | None:
     """The side, limit and quantity of an order this command sent into the book to trade."""
     if not events:
         return None
@@ -171,7 +175,9 @@ def _incoming_order(
         case NewLimitOrder() if isinstance(first, OrderAccepted):
             return command.side, command.price, command.quantity
         case NewMarketOrder() if isinstance(first, OrderAccepted):
-            return command.side, None, command.quantity
+            assert before.last_trade_price is not None, "market order accepted with no band"
+            limit = protection_limit(command.side, before.last_trade_price, rules)
+            return command.side, limit, command.quantity
         case ModifyOrder() if (
             isinstance(first, OrderModified) and not first.kept_priority and first.remaining
         ):
@@ -181,10 +187,52 @@ def _incoming_order(
             return None
 
 
-def _within_limit(side: Side, limit: int | None, price: int) -> bool:
-    if limit is None:
-        return True
+def _within_limit(side: Side, limit: int, price: int) -> bool:
     return price <= limit if side is Side.BUY else price >= limit
+
+
+def protection_limit(side: Side, last_trade_price: int, rules: MarketRules) -> int:
+    """NSE's band, from its circular: X% of the last trade, at least the minimum width."""
+    width = max(last_trade_price * rules.protection_bps // 10_000, rules.protection_min_ticks)
+    return last_trade_price + width if side is Side.BUY else last_trade_price - width
+
+
+def check_market_order_outcome(
+    before: EngineSnapshot, after: EngineSnapshot, command: NewMarketOrder, events: list[Event]
+) -> None:
+    """What happens to a market order's remainder depends only on the book it leaves behind.
+
+    Orders still beyond the band on the other side: cancelled for price
+    protection. Otherwise the other side is empty, and an IOC order is cancelled
+    while a DAY order rests at the best price on its own side, or at the last
+    traded price if its own side is empty too.
+    """
+    if not events or not isinstance(events[0], OrderAccepted):
+        return
+    order_id = events[0].order_id
+    outcome = events[-1]
+    opposite = after.asks if command.side is Side.BUY else after.bids
+    own_before = before.bids if command.side is Side.BUY else before.asks
+    match outcome:
+        case OrderCancelled(order_id=cancelled, reason=CancelReason.PRICE_PROTECTION):
+            assert cancelled == order_id
+            assert opposite, "cancelled for protection with nothing beyond the band"
+        case OrderCancelled(order_id=cancelled, reason=CancelReason.UNFILLED_IOC):
+            assert cancelled == order_id
+            assert command.validity is Validity.IOC
+            assert not opposite
+        case MarketOrderConverted(order_id=converted, price=price):
+            assert converted == order_id
+            assert command.validity is Validity.DAY
+            assert not opposite
+            expected = own_before[0].price if own_before else after.last_trade_price
+            assert price == expected
+            own_after = after.bids if command.side is Side.BUY else after.asks
+            level = [o for o in own_after if o.price == price]
+            assert level[-1].order_id == order_id, "converted order is not last in its queue"
+        case _:
+            assert isinstance(outcome, OrderAccepted | Trade)
+            assert sum(e.quantity for e in events if isinstance(e, Trade)) == command.quantity
 
 
 def check_modify_priority(
