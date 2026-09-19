@@ -78,6 +78,7 @@ ignore = [
     "D",       # test names are the documentation
     "PLR2004", # literal quantities and prices are the point of a test
     "S101",    # pytest uses assert
+    "S311",    # seeded pseudo-random sequences are the point, not a security risk
 ]
 
 [tool.ruff.lint.pydocstyle]
