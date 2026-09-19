@@ -12,10 +12,9 @@ class BookSide:
 
     Level prices sit in a sorted list of keys arranged so the best price is always
     last: the key is the price for bids and the negated price for asks. Reading the
-    best level, and dropping it once a sweep empties it, both happen at the end of
-    the list, which is O(1). A new price costs a binary search plus a shift of the
-    keys behind it, and new prices mostly arrive near the top of the book, which is
-    the cheap end.
+    best level is O(1). Adding or dropping a level costs a binary search plus a
+    shift of the keys after it, and that shift is empty at the best price and
+    short near the top of the book, where most levels come and go.
     """
 
     __slots__ = ("_keys", "_levels", "_sign", "side")
