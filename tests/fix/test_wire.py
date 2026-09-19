@@ -93,3 +93,49 @@ def test_decoding_carries_on_after_a_garbled_message() -> None:
 
     assert isinstance(decoded[0], Garbled)
     assert decoded[1] == FIELDS
+
+
+def framed(body: str) -> bytes:
+    """A message framed by hand, so a test can build one the encoder would refuse."""
+    head = f"8=FIX.4.4\x019={len(body)}\x01"
+    checksum = sum((head + body).encode()) % 256
+    return f"{head}{body}10={checksum:03}\x01".encode()
+
+
+def test_framing_fields_are_not_the_callers_to_write() -> None:
+    with pytest.raises(ValueError, match="BodyLength"):
+        encode(((35, "0"), (9, "58")))
+
+
+def test_a_value_that_is_not_ascii_is_garbled() -> None:
+    (decoded,) = Decoder().feed(encode(((35, "0"), (58, "café"))))
+
+    assert isinstance(decoded, Garbled)
+    assert "ASCII" in decoded.reason
+
+
+def test_a_message_whose_type_is_not_third_is_garbled() -> None:
+    (decoded,) = Decoder().feed(framed("49=EXCHANGE\x0135=0\x01"))
+
+    assert isinstance(decoded, Garbled)
+    assert "MsgType" in decoded.reason
+
+
+def test_a_damaged_message_with_nothing_after_it_leaves_the_decoder_empty() -> None:
+    decoder = Decoder()
+
+    decoded = decoder.feed(HEARTBEAT.replace(b"9=58", b"9=57"))
+
+    assert [type(d) for d in decoded] == [Garbled]
+    assert decoder.feed(HEARTBEAT) == [FIELDS]
+
+
+def test_a_message_with_broken_framing_does_not_swallow_the_next_one() -> None:
+    # The checksum field's tag is damaged, so the framing runs on into the next
+    # message. The decoder must go back to the following BeginString.
+    broken = HEARTBEAT.replace(b"10=014", b"1x=014")
+
+    decoded = Decoder().feed(broken + HEARTBEAT)
+
+    assert isinstance(decoded[0], Garbled)
+    assert decoded[1:] == [FIELDS]

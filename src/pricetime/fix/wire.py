@@ -73,29 +73,30 @@ class Decoder:
             try:
                 message = self._parser.get_message()
             except ParsingError as error:
-                self._parser.reset()
+                # A field the parser cannot read at all: the damage starts here.
                 decoded.append(Garbled(f"unreadable field: {error}", b""))
+                self._skip_to_next_message(b"")
                 continue
             if message is None:
                 return decoded
             checked = _checked(message)
-            if isinstance(checked, Garbled):
-                self._resynchronise(checked.raw)
             decoded.append(checked)
+            if isinstance(checked, Garbled):
+                self._skip_to_next_message(checked.raw)
 
-    def _resynchronise(self, raw: bytes) -> None:
-        """A garbled message can swallow the start of the next one, so go back to it.
+    def _skip_to_next_message(self, swallowed: bytes) -> None:
+        """Start again at the next BeginString, so one damaged message costs only itself.
 
-        Framing is found by looking for the checksum field, so a message whose
-        own framing is damaged may take a good message with it. Anything after
-        the next BeginString is put back in front of the buffer.
+        Messages are framed by their checksum field, so a message whose own
+        framing is damaged can swallow the one behind it. Whatever was consumed
+        goes back in front of the buffer, and everything up to the next
+        BeginString is dropped.
         """
-        start = raw.find(_BEGIN_STRING_FIELD, 1)
-        if start == -1:
-            return
-        remaining = self._parser.get_buffer()
+        remaining = swallowed + self._parser.get_buffer()
         self._parser.reset()
-        self._parser.append_buffer(raw[start:] + remaining)
+        start = remaining.find(_BEGIN_STRING_FIELD, 1)
+        if start != -1:
+            self._parser.append_buffer(remaining[start:])
 
 
 def _checked(message: simplefix.FixMessage) -> Fields | Garbled:
