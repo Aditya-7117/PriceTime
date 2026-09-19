@@ -24,6 +24,7 @@ CHECKSUM_FIELD_LENGTH = len(b"10=000\x01")
 
 _FRAMING = frozenset({tags.BEGIN_STRING, tags.BODY_LENGTH, tags.CHECK_SUM})
 _SHAPE = [tags.BEGIN_STRING, tags.BODY_LENGTH, tags.MSG_TYPE, tags.CHECK_SUM]
+_BEGIN_STRING_FIELD = f"8={BEGIN_STRING}".encode() + SOH
 
 type Fields = tuple[tuple[int, str], ...]
 
@@ -77,7 +78,24 @@ class Decoder:
                 continue
             if message is None:
                 return decoded
-            decoded.append(_checked(message))
+            checked = _checked(message)
+            if isinstance(checked, Garbled):
+                self._resynchronise(checked.raw)
+            decoded.append(checked)
+
+    def _resynchronise(self, raw: bytes) -> None:
+        """A garbled message can swallow the start of the next one, so go back to it.
+
+        Framing is found by looking for the checksum field, so a message whose
+        own framing is damaged may take a good message with it. Anything after
+        the next BeginString is put back in front of the buffer.
+        """
+        start = raw.find(_BEGIN_STRING_FIELD, 1)
+        if start == -1:
+            return
+        remaining = self._parser.get_buffer()
+        self._parser.reset()
+        self._parser.append_buffer(raw[start:] + remaining)
 
 
 def _checked(message: simplefix.FixMessage) -> Fields | Garbled:
