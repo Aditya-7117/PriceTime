@@ -539,6 +539,10 @@ ruff==0.16.8 \
     --hash=sha256:d075e820af612102ce217f07cc93e69f9490b10ec13ea85fa87bd03d996cef8a \
     --hash=sha256:efa3e7a16d1baaa79957888dfdf8be9ef2e44db81cb032af06d76632ab59e773
     # via pricetime (pyproject.toml)
+simplefix==1.0.17 \
+    --hash=sha256:d7f86666f508b11a8839d26ad66d63eaa5e53e6d0d4e23f5ef065feead60e658 \
+    --hash=sha256:da15798755447b9719f8688ca4cc29ee20c6d94d3227f22f60e04dcf347a2c68
+    # via pricetime (pyproject.toml)
 sortedcontainers==2.4.0 \
     --hash=sha256:25caa5a06cc30b6b83d11423433f65d1f9d76c4c6a0c90e3379eaa43b9bfdb88 \
     --hash=sha256:a163dcaede0f1c021485e957a39245190e74249897e2ae4b2aa38595db237ee0

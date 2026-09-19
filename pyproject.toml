@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.14",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = ["simplefix>=1.0.17"]
 
 [project.optional-dependencies]
 dev = [
@@ -97,6 +97,12 @@ enable_error_code = [
     "redundant-expr",
     "truthy-bool",
 ]
+
+# simplefix ships no type hints, so it is confined to pricetime.fix.wire, which
+# gives the rest of the code checked types.
+[[tool.mypy.overrides]]
+module = ["simplefix.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 minversion = "9.0"
