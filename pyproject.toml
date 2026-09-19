@@ -1,0 +1,114 @@
+[build-system]
+requires = ["hatchling==1.32.3"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pricetime"
+version = "0.1.0"
+description = "A limit order book and matching engine with price-time priority."
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [{ name = "Aditya Magar" }]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "hypothesis>=6.168",
+    "mypy>=2.3",
+    "pip-tools>=7.6",
+    "pytest>=9.1",
+    "pytest-cov>=7.1",
+    "ruff>=0.16",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pricetime"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "A",    # shadowing builtins
+    "ARG",  # unused arguments
+    "B",    # likely bugs
+    "BLE",  # blind except
+    "C4",   # comprehensions
+    "D",    # docstrings
+    "E",    # pycodestyle errors
+    "ERA",  # commented-out code
+    "F",    # pyflakes
+    "FIX",  # TODO, FIXME and XXX markers
+    "G",    # logging format
+    "I",    # import order
+    "LOG",  # logging misuse
+    "N",    # naming
+    "PERF", # performance anti-patterns
+    "PGH",  # blanket type ignores
+    "PIE",  # unnecessary code
+    "PL",   # pylint
+    "PT",   # pytest style
+    "PTH",  # pathlib over os.path
+    "RET",  # return statements
+    "RUF",  # ruff-specific
+    "S",    # security
+    "SIM",  # simplifications
+    "T20",  # print statements
+    "TRY",  # exception handling
+    "UP",   # modern syntax
+    "W",    # pycodestyle warnings
+]
+ignore = [
+    "D105",   # magic methods document themselves
+    "D107",   # __init__ is documented on the class
+    "TRY003", # exception messages carry context at the raise site
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "D",       # test names are the documentation
+    "PLR2004", # literal quantities and prices are the point of a test
+    "S101",    # pytest uses assert
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+warn_unreachable = true
+enable_error_code = [
+    "ignore-without-code",
+    "possibly-undefined",
+    "redundant-expr",
+    "truthy-bool",
+]
+
+[tool.pytest.ini_options]
+minversion = "9.0"
+testpaths = ["tests"]
+addopts = ["-ra", "--strict-markers", "--strict-config"]
+xfail_strict = true
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+branch = true
+source = ["pricetime"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "assert_never\\(",
+]
