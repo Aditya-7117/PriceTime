@@ -3,13 +3,15 @@
 from typing import assert_never
 
 from pricetime.book import BookSide, OrderBook
-from pricetime.commands import CancelOrder, Command, NewLimitOrder, NewMarketOrder
+from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
 from pricetime.events import (
     CancelReason,
     CancelRejected,
     Event,
+    ModifyRejected,
     OrderAccepted,
     OrderCancelled,
+    OrderModified,
     OrderRejected,
     RejectReason,
     Trade,
@@ -50,6 +52,8 @@ class MatchingEngine:
                 return self._new_market(command)
             case CancelOrder():
                 return self._cancel(command)
+            case ModifyOrder():
+                return self._modify(command)
             case _:
                 assert_never(command)
 
@@ -128,6 +132,38 @@ class MatchingEngine:
             )
         ]
 
+    def _modify(self, command: ModifyOrder) -> list[Event]:
+        order = self._book.get(command.order_id)
+        if order is None:
+            reason = self._why_not_resting(command.order_id)
+            return [ModifyRejected(order_id=command.order_id, reason=reason)]
+        if command.quantity <= 0:
+            return [ModifyRejected(order_id=order.order_id, reason=RejectReason.INVALID_QUANTITY)]
+        if command.price <= 0:
+            return [ModifyRejected(order_id=order.order_id, reason=RejectReason.INVALID_PRICE)]
+
+        remaining = command.quantity - order.filled
+        if remaining <= 0:
+            self._book.remove(order)
+            return [_modified(command, remaining=0, kept_priority=False)]
+
+        if command.price == order.price and remaining <= order.remaining:
+            self._book.reduce(order, order.remaining - remaining)
+            return [_modified(command, remaining=remaining, kept_priority=True)]
+
+        # A new price or a larger size goes to the back of the queue, exactly as a
+        # new order would, and trades first if the new price crosses the spread.
+        self._book.remove(order)
+        events: list[Event] = [_modified(command, remaining=remaining, kept_priority=False)]
+        unfilled = self._sweep(events, order.order_id, order.side, command.price, remaining)
+        order.filled += remaining - unfilled
+        if unfilled:
+            order.price = command.price
+            order.remaining = unfilled
+            order.priority = self._sequence
+            self._book.add(order)
+        return events
+
     def _sweep(
         self,
         events: list[Event],
@@ -186,6 +222,16 @@ class MatchingEngine:
         order_id = self._next_order_id
         self._next_order_id += 1
         return order_id
+
+
+def _modified(command: ModifyOrder, *, remaining: int, kept_priority: bool) -> OrderModified:
+    return OrderModified(
+        order_id=command.order_id,
+        price=command.price,
+        quantity=command.quantity,
+        remaining=remaining,
+        kept_priority=kept_priority,
+    )
 
 
 def _resting_orders(side: BookSide) -> tuple[RestingOrder, ...]:

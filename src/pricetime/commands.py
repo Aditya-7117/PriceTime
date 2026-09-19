@@ -34,4 +34,19 @@ class CancelOrder:
     order_id: int
 
 
-type Command = NewLimitOrder | NewMarketOrder | CancelOrder
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ModifyOrder:
+    """Change the price and total quantity of a resting order.
+
+    `quantity` is the new total, including anything already filled, as in a
+    FIX 4.4 cancel/replace. If 4 of 10 have filled and the owner asks for 8,
+    4 stay open. Reading the 8 as open quantity would let a modify that races a
+    fill leave the owner with more than they ever asked for.
+    """
+
+    order_id: int
+    price: int
+    quantity: int
+
+
+type Command = NewLimitOrder | NewMarketOrder | CancelOrder | ModifyOrder

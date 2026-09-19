@@ -87,4 +87,37 @@ class CancelRejected:
     reason: RejectReason
 
 
-type Event = OrderAccepted | OrderRejected | Trade | OrderCancelled | CancelRejected
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OrderModified:
+    """A modify was applied.
+
+    `quantity` is the new total the owner asked for. `remaining` is what that
+    leaves open once earlier fills are counted, before any trading the modify
+    itself triggers; zero means the order is finished and has left the book.
+    `kept_priority` says whether the order held its place in the queue.
+    """
+
+    order_id: int
+    price: int
+    quantity: int
+    remaining: int
+    kept_priority: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ModifyRejected:
+    """A modify was refused. The order it named, if any, is unchanged."""
+
+    order_id: int
+    reason: RejectReason
+
+
+type Event = (
+    OrderAccepted
+    | OrderRejected
+    | Trade
+    | OrderCancelled
+    | OrderModified
+    | CancelRejected
+    | ModifyRejected
+)

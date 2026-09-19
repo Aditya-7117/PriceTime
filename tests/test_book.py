@@ -109,3 +109,16 @@ def test_adding_an_order_id_twice_is_an_error() -> None:
 
     with pytest.raises(ValueError, match="already resting"):
         book.add(make_order(1, Side.SELL, 101))
+
+
+def test_reduce_lowers_a_resting_order_in_place() -> None:
+    book = OrderBook()
+    first, second = make_order(1, Side.BUY, 100), make_order(2, Side.BUY, 100)
+    book.add(first)
+    book.add(second)
+
+    book.reduce(first, 3)
+
+    (level,) = book.side(Side.BUY)
+    assert [(order.order_id, order.remaining) for order in level] == [(1, 7), (2, 10)]
+    assert level.total_quantity == 17

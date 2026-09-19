@@ -49,6 +49,10 @@ class BookSide:
             bisect.insort(self._keys, order.price * self._sign)
         level.append(order)
 
+    def reduce(self, order: Order, quantity: int) -> None:
+        """Take quantity off a resting order, leaving its queue position alone."""
+        self._levels[order.price].reduce(order, quantity)
+
     def remove(self, order: Order) -> None:
         """Unlink a resting order, dropping its level if the level is now empty."""
         level = self._levels[order.price]
@@ -106,6 +110,10 @@ class OrderBook:
             raise ValueError(f"order {order.order_id} is already resting")
         self.side(order.side).add(order)
         self._orders[order.order_id] = order
+
+    def reduce(self, order: Order, quantity: int) -> None:
+        """Take quantity off a resting order, leaving its queue position alone."""
+        self.side(order.side).reduce(order, quantity)
 
     def remove(self, order: Order) -> None:
         """Take a resting order off the book in O(1), plus a level cleanup if it empties."""
