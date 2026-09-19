@@ -3,9 +3,10 @@
 from typing import assert_never
 
 from pricetime.book import BookSide, OrderBook
-from pricetime.commands import Command, NewLimitOrder, NewMarketOrder
+from pricetime.commands import CancelOrder, Command, NewLimitOrder, NewMarketOrder
 from pricetime.events import (
     CancelReason,
+    CancelRejected,
     Event,
     OrderAccepted,
     OrderCancelled,
@@ -47,6 +48,8 @@ class MatchingEngine:
                 return self._new_limit(command)
             case NewMarketOrder():
                 return self._new_market(command)
+            case CancelOrder():
+                return self._cancel(command)
             case _:
                 assert_never(command)
 
@@ -111,6 +114,20 @@ class MatchingEngine:
             )
         return events
 
+    def _cancel(self, command: CancelOrder) -> list[Event]:
+        order = self._book.get(command.order_id)
+        if order is None:
+            reason = self._why_not_resting(command.order_id)
+            return [CancelRejected(order_id=command.order_id, reason=reason)]
+        self._book.remove(order)
+        return [
+            OrderCancelled(
+                order_id=order.order_id,
+                quantity=order.remaining,
+                reason=CancelReason.REQUESTED,
+            )
+        ]
+
     def _sweep(
         self,
         events: list[Event],
@@ -153,6 +170,17 @@ class MatchingEngine:
                 if not maker.remaining:
                     self._book.remove(maker)
         return quantity
+
+    def _why_not_resting(self, order_id: int) -> RejectReason:
+        """Tell an order that has left the book apart from one that never existed.
+
+        IDs are issued in sequence, so any ID below the next one was issued at
+        some point. That answer needs no record of finished orders, so memory
+        does not grow with the number of orders ever seen.
+        """
+        if 0 < order_id < self._next_order_id:
+            return RejectReason.TOO_LATE
+        return RejectReason.UNKNOWN_ORDER
 
     def _issue_order_id(self) -> int:
         order_id = self._next_order_id

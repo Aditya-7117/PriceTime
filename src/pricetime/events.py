@@ -20,9 +20,18 @@ class RejectReason(enum.Enum):
     INVALID_PRICE = "invalid_price"
     """Price was zero or negative."""
 
+    UNKNOWN_ORDER = "unknown_order"
+    """No order with this ID was ever issued."""
+
+    TOO_LATE = "too_late"
+    """The order was issued but is no longer resting: it filled, was cancelled or was rejected."""
+
 
 class CancelReason(enum.Enum):
     """Why open quantity left the book without trading."""
+
+    REQUESTED = "requested"
+    """The owner asked for it."""
 
     NO_LIQUIDITY = "no_liquidity"
     """A market order ran out of orders to trade against."""
@@ -70,4 +79,12 @@ class OrderCancelled:
     reason: CancelReason
 
 
-type Event = OrderAccepted | OrderRejected | Trade | OrderCancelled
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CancelRejected:
+    """A cancel was refused. The order it named, if any, is unchanged."""
+
+    order_id: int
+    reason: RejectReason
+
+
+type Event = OrderAccepted | OrderRejected | Trade | OrderCancelled | CancelRejected

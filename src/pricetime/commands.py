@@ -27,4 +27,11 @@ class NewMarketOrder:
     quantity: int
 
 
-type Command = NewLimitOrder | NewMarketOrder
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CancelOrder:
+    """Remove the open quantity of a resting order. Filled quantity is final."""
+
+    order_id: int
+
+
+type Command = NewLimitOrder | NewMarketOrder | CancelOrder
