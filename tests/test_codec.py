@@ -7,7 +7,14 @@ from pricetime.codec import (
     encode_command,
     encode_header,
 )
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.orders import Side
 from pricetime.rules import MarketRules, PriceBand
 
@@ -25,11 +32,12 @@ def test_a_header_decodes_to_the_rules_it_was_written_with(rules: MarketRules) -
     "command",
     [
         NewLimitOrder(side=Side.BUY, price=101, quantity=10),
+        NewLimitOrder(side=Side.SELL, price=99, quantity=2, validity=Validity.IOC),
         NewMarketOrder(side=Side.SELL, quantity=4),
         CancelOrder(order_id=3),
         ModifyOrder(order_id=3, price=99, quantity=7),
     ],
-    ids=["limit", "market", "cancel", "modify"],
+    ids=["limit", "ioc limit", "market", "cancel", "modify"],
 )
 def test_a_command_decodes_to_itself_and_its_sequence_number(command: Command) -> None:
     assert decode_command(encode_command(42, command)) == (42, command)

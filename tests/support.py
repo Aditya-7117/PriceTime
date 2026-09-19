@@ -2,7 +2,14 @@
 
 import random
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.engine import MatchingEngine
 from pricetime.orders import Side
 from pricetime.rules import MarketRules
@@ -13,12 +20,12 @@ def new_engine(rules: MarketRules | None = None) -> MatchingEngine:
     return MatchingEngine(MarketRules() if rules is None else rules)
 
 
-def buy(price: int, quantity: int) -> NewLimitOrder:
-    return NewLimitOrder(side=Side.BUY, price=price, quantity=quantity)
+def buy(price: int, quantity: int, *, validity: Validity = Validity.DAY) -> NewLimitOrder:
+    return NewLimitOrder(side=Side.BUY, price=price, quantity=quantity, validity=validity)
 
 
-def sell(price: int, quantity: int) -> NewLimitOrder:
-    return NewLimitOrder(side=Side.SELL, price=price, quantity=quantity)
+def sell(price: int, quantity: int, *, validity: Validity = Validity.DAY) -> NewLimitOrder:
+    return NewLimitOrder(side=Side.SELL, price=price, quantity=quantity, validity=validity)
 
 
 def market_buy(quantity: int) -> NewMarketOrder:

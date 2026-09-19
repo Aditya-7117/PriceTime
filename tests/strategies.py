@@ -10,7 +10,14 @@ and unknown IDs still appear, just not often enough to crowd out the rest.
 
 from hypothesis import strategies as st
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.orders import Side
 from pricetime.rules import MarketRules, PriceBand
 
@@ -18,6 +25,8 @@ BUY_PRICES = st.integers(min_value=95, max_value=102)
 SELL_PRICES = st.integers(min_value=98, max_value=105)
 QUANTITIES = st.integers(min_value=1, max_value=20)
 INVALID_VALUES = st.sampled_from([0, -1])
+# Mostly DAY, so books build depth; IOC often enough to exercise its cancels.
+VALIDITIES = st.sampled_from([Validity.DAY, Validity.DAY, Validity.DAY, Validity.IOC])
 
 # A band that sometimes cuts through the generated prices, so both sides of it are exercised.
 price_bands = st.builds(
@@ -62,8 +71,10 @@ def command_sequences(draw: st.DrawFn, max_size: int = 100) -> list[Command]:
 
         side = draw(st.sampled_from(Side))
         if kind == "limit":
-            price, quantity = draw(prices_for(side)), draw(QUANTITIES)
-            commands.append(NewLimitOrder(side=side, price=price, quantity=quantity))
+            price, quantity, validity = draw(prices_for(side)), draw(QUANTITIES), draw(VALIDITIES)
+            commands.append(
+                NewLimitOrder(side=side, price=price, quantity=quantity, validity=validity)
+            )
             limits[next_order_id] = (side, price, quantity)
         elif kind == "market":
             commands.append(NewMarketOrder(side=side, quantity=draw(QUANTITIES)))

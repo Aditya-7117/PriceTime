@@ -39,6 +39,9 @@ class CancelReason(enum.Enum):
     NO_LIQUIDITY = "no_liquidity"
     """A market order ran out of orders to trade against."""
 
+    UNFILLED_IOC = "unfilled_ioc"
+    """An immediate-or-cancel order could not fill completely at once."""
+
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class OrderAccepted:

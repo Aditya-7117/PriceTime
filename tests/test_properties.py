@@ -2,8 +2,8 @@
 
 from hypothesis import given
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder
-from pricetime.events import CancelRejected, OrderCancelled
+from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, Validity
+from pricetime.events import CancelRejected, OrderAccepted, OrderCancelled
 from pricetime.rules import MarketRules
 from tests.invariants import (
     Ledger,
@@ -103,3 +103,13 @@ def test_no_order_ever_rests_outside_the_price_band(
     for command in commands:
         engine.process(command)
         check_within_band(engine, rules)
+
+
+@given(market_rules, command_sequences())
+def test_an_ioc_order_never_rests(rules: MarketRules, commands: list[Command]) -> None:
+    engine = new_engine(rules)
+    for command in commands:
+        events = engine.process(command)
+        if isinstance(command, NewLimitOrder) and command.validity is Validity.IOC:
+            accepted = [e.order_id for e in events if isinstance(e, OrderAccepted)]
+            assert all(order_id not in engine.book for order_id in accepted)

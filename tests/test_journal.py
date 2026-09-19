@@ -8,7 +8,14 @@ from pathlib import Path
 import pytest
 from hypothesis import given
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.journal import (
     JournaledEngine,
     JournalError,
@@ -30,6 +37,7 @@ HEADER = (
 EVERY_KIND: list[Command] = [
     NewLimitOrder(side=Side.BUY, price=101, quantity=10),
     NewLimitOrder(side=Side.SELL, price=0, quantity=-1),
+    NewLimitOrder(side=Side.SELL, price=102, quantity=3, validity=Validity.IOC),
     NewMarketOrder(side=Side.SELL, quantity=4),
     CancelOrder(order_id=1),
     ModifyOrder(order_id=1, price=102, quantity=7),
@@ -57,7 +65,7 @@ def test_records_are_numbered_from_one_in_the_order_written(tmp_path: Path) -> N
 
     header, *records = path.read_text().splitlines()
     assert json.loads(header)["format"] == "pricetime-journal"
-    assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5]
+    assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5, 6]
 
 
 def test_reopening_a_journal_appends_rather_than_truncating(tmp_path: Path) -> None:
@@ -68,7 +76,7 @@ def test_reopening_a_journal_appends_rather_than_truncating(tmp_path: Path) -> N
 
     assert list(read_journal(path)) == EVERY_KIND
     records = path.read_text().splitlines()[1:]
-    assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5]
+    assert [json.loads(record)["seq"] for record in records] == [1, 2, 3, 4, 5, 6]
 
 
 def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
@@ -124,7 +132,8 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
             id="extra field",
         ),
         pytest.param(
-            HEADER + '{"seq":1,"type":"limit","side":"buy","price":"101","quantity":1}\n',
+            HEADER + '{"seq":1,"type":"limit","side":"buy","price":"101","quantity":1,'
+            '"validity":"day"}\n',
             "line 2: price must be an integer",
             id="string price",
         ),
@@ -132,6 +141,12 @@ def test_an_empty_file_is_an_empty_journal(tmp_path: Path) -> None:
             HEADER + '{"seq":1,"type":"market","side":"buy","quantity":true}\n',
             "line 2: quantity must be an integer",
             id="boolean quantity",
+        ),
+        pytest.param(
+            HEADER + '{"seq":1,"type":"limit","side":"buy","price":101,"quantity":1,'
+            '"validity":"gtc"}\n',
+            "line 2: validity must be",
+            id="validity",
         ),
         pytest.param(
             HEADER + '{"seq":1,"type":"market","side":"up","quantity":1}\n',

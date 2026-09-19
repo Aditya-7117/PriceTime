@@ -5,18 +5,34 @@ sequence of commands it has processed and nothing else, which is what makes a
 recorded sequence replayable.
 """
 
+import enum
 from dataclasses import dataclass
 
 from pricetime.orders import Side
 
 
+class Validity(enum.Enum):
+    """How long a new order may wait for a counterparty (NSE's time conditions)."""
+
+    DAY = "day"
+    """Rest on the book until filled, cancelled or the session ends."""
+
+    IOC = "ioc"
+    """Immediate or cancel: trade what is possible now and cancel the rest."""
+
+
 @dataclass(frozen=True, slots=True, kw_only=True)
 class NewLimitOrder:
-    """Buy or sell up to `quantity` at `price` or better; rest whatever does not fill."""
+    """Buy or sell up to `quantity` at `price` or better.
+
+    What does not fill at once rests on the book for a DAY order, and is
+    cancelled for an IOC order.
+    """
 
     side: Side
     price: int
     quantity: int
+    validity: Validity = Validity.DAY
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -3,7 +3,14 @@
 from typing import assert_never
 
 from pricetime.book import BookSide, OrderBook
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.events import (
     CancelReason,
     CancelRejected,
@@ -84,7 +91,15 @@ class MatchingEngine:
             )
         ]
         unfilled = self._sweep(events, order_id, command.side, command.price, command.quantity)
-        if unfilled:
+        if unfilled and command.validity is Validity.IOC:
+            events.append(
+                OrderCancelled(
+                    order_id=order_id,
+                    quantity=unfilled,
+                    reason=CancelReason.UNFILLED_IOC,
+                )
+            )
+        elif unfilled:
             self._book.add(
                 Order(
                     order_id=order_id,

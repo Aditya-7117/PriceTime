@@ -10,7 +10,14 @@ import json
 from collections.abc import Callable
 from typing import assert_never
 
-from pricetime.commands import CancelOrder, Command, ModifyOrder, NewLimitOrder, NewMarketOrder
+from pricetime.commands import (
+    CancelOrder,
+    Command,
+    ModifyOrder,
+    NewLimitOrder,
+    NewMarketOrder,
+    Validity,
+)
 from pricetime.orders import Side
 from pricetime.rules import MarketRules, PriceBand
 
@@ -63,6 +70,7 @@ def encode_command(sequence: int, command: Command) -> str:
                 "side": command.side.value,
                 "price": command.price,
                 "quantity": command.quantity,
+                "validity": command.validity.value,
             }
         case NewMarketOrder():
             record = {
@@ -144,11 +152,20 @@ def _side(record: _Record) -> Side:
         raise DecodeError(f"side must be 'buy' or 'sell', found {value!r}") from error
 
 
+def _validity(record: _Record) -> Validity:
+    value = record["validity"]
+    try:
+        return Validity(value)
+    except ValueError as error:
+        raise DecodeError(f"validity must be 'day' or 'ioc', found {value!r}") from error
+
+
 def _limit(record: _Record) -> Command:
     return NewLimitOrder(
         side=_side(record),
         price=_integer(record, "price"),
         quantity=_integer(record, "quantity"),
+        validity=_validity(record),
     )
 
 
@@ -169,7 +186,7 @@ def _modify(record: _Record) -> Command:
 
 
 _DECODERS: dict[str, tuple[tuple[str, ...], Callable[[_Record], Command]]] = {
-    "limit": (("side", "price", "quantity"), _limit),
+    "limit": (("side", "price", "quantity", "validity"), _limit),
     "market": (("side", "quantity"), _market),
     "cancel": (("order_id",), _cancel),
     "modify": (("order_id", "price", "quantity"), _modify),
