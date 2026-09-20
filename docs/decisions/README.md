@@ -21,3 +21,10 @@ A record that a later one replaces is marked `superseded`, and it says by which.
 | [14](0014-day-and-ioc-validity.md) | DAY and IOC validity |
 | [15](0015-market-price-protection.md) | Market orders follow NSE's market price protection |
 | [16](0016-self-trade-prevention.md) | Self-trade prevention, as NSE's check works |
+| [17](0017-fix-session-layer-without-sockets.md) | The FIX session layer has no sockets in it |
+| [18](0018-registered-accounts-and-gateway-checks.md) | Accounts are registered before they can trade |
+| [19](0019-sessions-persist-their-state.md) | A session's state outlives the process |
+| [20](0020-group-commit-before-acknowledgement.md) | Nothing is acknowledged before it is on disk |
+| [21](0021-throttles-and-cancel-on-disconnect.md) | Each session has its own limits |
+| [22](0022-latency-is-measured-open-loop.md) | Latency is measured open loop, against a baseline |
+| [23](0023-the-replay-page.md) | The replay page is generated from a journal |
