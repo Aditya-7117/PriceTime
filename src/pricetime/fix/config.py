@@ -53,13 +53,22 @@ class SessionSettings:
 
 @dataclass(frozen=True, slots=True)
 class ExchangeConfig:
-    """Everything the gateway needs to know before the first connection arrives."""
+    """Everything the gateway needs to know before the first connection arrives.
+
+    `force_to_disk` is what makes an acknowledgement mean something: every batch
+    is forced onto the disk before a single reply leaves. Turning it off leaves
+    the writes in the operating system's hands, which survives a crash of this
+    process but not of the machine. It exists so the benchmark can show what
+    durability costs, and for a test environment that does not need it. A real
+    exchange leaves it on.
+    """
 
     comp_id: str
     instruments: Mapping[str, Instrument]
     accounts: Mapping[str, int] = field(default_factory=dict)
     sessions: Mapping[str, SessionSettings] = field(default_factory=dict)
     heartbeat_interval: int = 30
+    force_to_disk: bool = True
 
     def __post_init__(self) -> None:
         if not self.comp_id:

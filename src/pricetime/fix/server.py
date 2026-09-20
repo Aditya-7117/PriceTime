@@ -174,6 +174,8 @@ class ExchangeServer:
 
     def _commit(self) -> None:
         """One sync for the whole batch, before anything is acknowledged."""
+        if not self._config.force_to_disk:
+            return
         self._gateway.commit()
         for store in self._stores.values():
             store.sync()
