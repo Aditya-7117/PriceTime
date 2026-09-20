@@ -1,5 +1,7 @@
 import json
 import re
+import shutil
+import subprocess
 from decimal import Decimal
 from pathlib import Path
 from typing import get_args
@@ -11,6 +13,7 @@ from pricetime.engine import MatchingEngine
 from pricetime.events import Event
 from pricetime.journal import JournaledEngine, read_journal
 from pricetime.orders import Side
+from pricetime.prices import from_ticks
 from pricetime.rules import MarketRules, PriceBand
 from pricetime.viewer.render import (
     COMMAND_KINDS,
@@ -32,6 +35,8 @@ RULES = MarketRules(
     opening_price=100,
 )
 SESSION = Session(symbol="TESTCO", tick_size=Decimal("0.05"))
+NODE = shutil.which("node")
+NEEDS_NODE = pytest.mark.skipif(NODE is None, reason="node checks the page's script when present")
 SCRIPT: list[Command] = [
     buy(99, 50),
     buy(98, 40),
@@ -198,3 +203,53 @@ def test_the_command_line_builds_a_page(tmp_path: Path) -> None:
 
     assert main([str(journal), "--symbol", "ACME", "-o", str(destination)]) == 0
     assert payload_of(destination.read_text(encoding="utf-8"))["symbol"] == "ACME"
+
+
+def script_of(page: str) -> str:
+    return page.split("<script>")[1].split("</script>", maxsplit=1)[0]
+
+
+def run_node(source: Path) -> subprocess.CompletedProcess[str]:
+    assert NODE is not None
+    return subprocess.run(  # noqa: S603
+        [NODE, str(source)], capture_output=True, text=True, check=False
+    )
+
+
+@NEEDS_NODE
+def test_the_pages_script_is_valid_javascript(tmp_path: Path) -> None:
+    page = write(journal_of(tmp_path, SCRIPT), tmp_path / "index.html", SESSION)
+    source = tmp_path / "page.js"
+    source.write_text(script_of(page.read_text(encoding="utf-8")), encoding="utf-8")
+
+    assert NODE is not None
+    checked = subprocess.run(  # noqa: S603
+        [NODE, "--check", str(source)], capture_output=True, text=True, check=False
+    )
+
+    assert checked.returncode == 0, checked.stderr
+
+
+@NEEDS_NODE
+def test_the_page_writes_prices_the_way_the_engine_does(tmp_path: Path) -> None:
+    """The page formats ticks itself, so check it agrees with the engine's own arithmetic."""
+    page = write(journal_of(tmp_path, SCRIPT), tmp_path / "index.html", SESSION)
+    # Everything above this marker is arithmetic and formatting, and touches no page elements.
+    arithmetic = script_of(page.read_text(encoding="utf-8")).split("/* ---------- the parts")[0]
+    expected = {ticks: str(from_ticks(ticks, SESSION.tick_size)) for ticks in (1, 20, 1_995, 4_001)}
+    checks = [f"check(money({ticks}), {value!r});" for ticks, value in expected.items()] + [
+        # Above a thousand the page groups digits the Indian way, as a rupee price is written.
+        'check(money(2500000), "1,25,000.00");',
+        'check(quantity(1234567), "12,34,567");',
+        'check(priced(1995), "\u20b999.75");',
+    ]
+    source = tmp_path / "prices.js"
+    source.write_text(
+        arithmetic
+        + "\nfunction check(got, want) {"
+        + " if (got !== want) { console.error(want + ' != ' + got); process.exit(1); } }\n"
+        + "\n".join(checks),
+        encoding="utf-8",
+    )
+
+    assert run_node(source).returncode == 0, run_node(source).stderr

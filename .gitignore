@@ -32,3 +32,6 @@ tmp/
 
 # macOS
 .DS_Store
+
+# The folder the command-line exchange writes its journal and session files into
+run/
