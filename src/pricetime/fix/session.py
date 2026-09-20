@@ -140,6 +140,19 @@ class FixSession:
         )
         return [self._transmit(MsgType.LOGON, logon, now)]
 
+    def transport_lost(self) -> None:
+        """The connection is gone.
+
+        The session itself lives on: its sequence numbers and everything it has
+        sent stay in the store, so the counterparty can reconnect, log on and
+        ask for whatever it missed. Only the state that belonged to the
+        connection is cleared.
+        """
+        self._state = _State.CONNECTED
+        self._decoder = Decoder()
+        self._test_request_id = None
+        self._awaiting_resend = False
+
     def receive(self, data: bytes, now: datetime) -> list[Action]:
         """Take bytes off the wire and say what should happen."""
         actions: list[Action] = []
@@ -155,14 +168,18 @@ class FixSession:
         return actions
 
     def send_application(self, fields: Fields, now: datetime) -> list[Action]:
-        """Send an application message, for example an execution report."""
-        if self._state is not _State.ACTIVE:
-            return []
+        """Send an application message, for example an execution report.
+
+        A message written while the line is down still takes its sequence number
+        and goes into the store, so the counterparty can ask for it after it
+        logs on again. Only the bytes wait.
+        """
         msg_type = dict(fields).get(tags.MSG_TYPE)
         if msg_type is None:
             raise ValueError("an application message needs its MsgType")
         body = tuple(pair for pair in fields if pair[0] != tags.MSG_TYPE)
-        return [self._transmit(msg_type, body, now)]
+        send = self._transmit(msg_type, body, now)
+        return [send] if self._state is _State.ACTIVE else []
 
     def tick(self, now: datetime) -> list[Action]:
         """Let time pass: send heartbeats, chase silence, give up on a dead session."""
@@ -209,12 +226,37 @@ class FixSession:
         if msg_type == MsgType.SEQUENCE_RESET and header.get(tags.GAP_FILL_FLAG) != "Y":
             # A reset that is not a gap fill applies whatever its own number says.
             return self._sequence_reset(header, now)
+        if (logon := self._on_logon_in_order_or_ahead(header, now)) is not None:
+            return logon
         if (out_of_order := self._on_out_of_order(msg_type, header, now)) is not None:
             return out_of_order
 
         self._store.record_inbound(int(header[tags.MSG_SEQ_NUM]))
         self._awaiting_resend = False
         return self._apply(msg_type, header, fields, now)
+
+    def _on_logon_in_order_or_ahead(
+        self, header: dict[int, str], now: datetime
+    ) -> list[Action] | None:
+        """Bring the session up on a Logon, even one that is ahead of the count.
+
+        A Logon is how a session starts, so it is acted on first and the gap is
+        chased afterwards. Waiting for the missing messages instead would leave
+        the session down, and the resend that would fix it could never be
+        delivered, because a session that is not up delivers nothing.
+        """
+        if header[tags.MSG_TYPE] != MsgType.LOGON:
+            return None
+        sequence = int(header[tags.MSG_SEQ_NUM])
+        expected = self._store.next_inbound
+        if sequence < expected:
+            return None
+        actions = self._on_logon(header, now)
+        if sequence == expected:
+            self._store.record_inbound(sequence)
+        else:
+            actions.extend(self._ask_for_resend(expected, sequence, now))
+        return actions
 
     def _refuse_bad_header(self, header: dict[int, str], now: datetime) -> list[Action] | None:
         """Refuse a message whose header cannot be trusted, or None to carry on."""
