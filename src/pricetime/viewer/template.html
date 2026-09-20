@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PriceTime — order book replay</title>
+<style>
+  :root {
+    --ink: #0a0d12;
+    --panel: #111620;
+    --sunk: #0c1017;
+    --line: #1e2634;
+    --line-soft: #161d28;
+    --text: #d5dce6;
+    --muted: #7a8699;
+    --dim: #4d5a6d;
+    --bid: #23a06a;
+    --bid-soft: rgba(35, 160, 106, .13);
+    --ask: #d75a4f;
+    --ask-soft: rgba(215, 90, 79, .13);
+    --accent: #d8a13f;
+    --accent-soft: rgba(216, 161, 63, .12);
+    --info: #4b8fd6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: env(safe-area-inset-top, 0px) 0 0;
+    background: var(--ink);
+    color: var(--text);
+    font: 13px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .num { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+
+  /* ---------- header ---------- */
+
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px 22px;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, #121823, #0c1119);
+  }
+
+  .mark {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: .22em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  .mark b { color: var(--text); font-weight: 600; }
+
+  .symbol {
+    font-family: var(--mono);
+    font-size: 19px;
+    font-weight: 600;
+    letter-spacing: .06em;
+  }
+
+  .facts { display: flex; flex-wrap: wrap; gap: 6px 18px; margin-left: auto; }
+
+  .fact { display: flex; gap: 7px; align-items: baseline; }
+
+  .fact span {
+    font-size: 10px;
+    letter-spacing: .13em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .fact b { font-family: var(--mono); font-weight: 500; font-size: 12.5px; }
+
+  /* ---------- layout ---------- */
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(230px, .85fr) minmax(300px, 1.3fr) minmax(230px, .85fr);
+    gap: 10px;
+    padding: 10px 16px 96px;
+    align-items: start;
+  }
+
+  @media (max-width: 1080px) {
+    main { grid-template-columns: 1fr; padding-bottom: 104px; }
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+
+  .panel + .panel { margin-top: 10px; }
+
+  .panel > h2 {
+    margin: 0;
+    padding: 8px 12px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--sunk);
+    border-bottom: 1px solid var(--line);
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .panel > h2 em { font-style: normal; color: var(--dim); letter-spacing: .08em; }
+
+  .scroll { max-height: 46vh; overflow-y: auto; overscroll-behavior: contain; }
+
+  .scroll::-webkit-scrollbar { width: 9px; }
+  .scroll::-webkit-scrollbar-thumb { background: #1d2532; border-radius: 9px; }
+
+  .empty { padding: 14px 12px; color: var(--dim); }
+
+  /* ---------- the command being replayed ---------- */
+
+  .now { padding: 12px; border-bottom: 1px solid var(--line-soft); }
+
+  .now .seq {
+    font-family: var(--mono);
+    font-size: 10.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+
+  .now .line { font-family: var(--mono); font-size: 14px; margin-top: 3px; }
+
+  .chip {
+    display: inline-block;
+    padding: 1px 6px;
+    margin-right: 7px;
+    border: 1px solid currentColor;
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    vertical-align: 1px;
+  }
+
+  .k-limit, .k-accepted { color: var(--info); }
+  .k-market, .k-converted { color: var(--accent); }
+  .k-cancel, .k-cancelled { color: var(--muted); }
+  .k-replace, .k-modified { color: #9b7fd4; }
+  .k-trade { color: var(--bid); }
+  .k-rejected { color: var(--ask); }
+
+  .events { list-style: none; margin: 0; padding: 0; }
+
+  .events li {
+    display: flex;
+    align-items: baseline;
+    gap: 2px;
+    padding: 6px 12px;
+    font-family: var(--mono);
+    font-size: 12px;
+    border-bottom: 1px solid var(--line-soft);
+  }
+
+  .events li:last-child { border-bottom: 0; }
+
+  /* ---------- the ladder ---------- */
+
+  .ladder { padding: 4px 0 6px; }
+
+  .head, .row {
+    display: grid;
+    grid-template-columns: 84px 1fr 52px 1fr;
+    gap: 8px;
+    padding: 0 12px;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .head {
+    font-size: 9.5px;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+    color: var(--dim);
+    padding-bottom: 4px;
+  }
+
+  .head i, .row i { font-style: normal; text-align: right; }
+
+  .row {
+    position: relative;
+    align-items: center;
+    height: 22px;
+    font-size: 12.5px;
+    border-left: 2px solid transparent;
+    padding-left: 10px;
+  }
+
+  .row .bar {
+    position: absolute;
+    top: 1px;
+    bottom: 1px;
+    right: 0;
+    border-radius: 1px 0 0 1px;
+    pointer-events: none;
+  }
+
+  .row.ask .bar { background: var(--ask-soft); }
+  .row.bid .bar { background: var(--bid-soft); }
+  .row.ask .price { color: var(--ask); }
+  .row.bid .price { color: var(--bid); }
+  .row .price, .row .qty { position: relative; }
+  .row .qty { text-align: right; }
+  .row .orders { text-align: right; color: var(--muted); }
+  .row .cum { text-align: right; color: var(--dim); position: relative; }
+
+  .row.touch { background: rgba(255, 255, 255, .025); }
+  .row.touch .price { font-weight: 600; }
+  .row.up { border-left-color: var(--bid); }
+  .row.down { border-left-color: var(--ask); }
+  .row.hit { background: var(--accent-soft); }
+  .row.hit .cum::after {
+    content: "traded";
+    position: absolute;
+    right: 100%;
+    margin-right: 8px;
+    font-size: 9.5px;
+    letter-spacing: .1em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+
+  .more { padding: 2px 12px 2px 22px; font-family: var(--mono); font-size: 10.5px; color: var(--dim); }
+
+  .spread {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-between;
+    gap: 4px 14px;
+    margin: 5px 12px;
+    padding: 6px 10px;
+    background: var(--sunk);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+  }
+
+  .spread span { color: var(--dim); font-size: 9.5px; letter-spacing: .12em; text-transform: uppercase; }
+  .spread div { display: flex; gap: 7px; align-items: baseline; }
+  .spread .last b { color: var(--accent); font-weight: 600; }
+
+  /* ---------- tapes ---------- */
+
+  .tape { list-style: none; margin: 0; padding: 0; }
+
+  .tape li {
+    display: grid;
+    grid-template-columns: 44px 1fr;
+    gap: 9px;
+    padding: 5px 12px;
+    border-bottom: 1px solid var(--line-soft);
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: default;
+  }
+
+  .tape li:last-child { border-bottom: 0; }
+  .tape li .at { color: var(--dim); }
+  .tape.steps li { cursor: pointer; }
+  .tape.steps li:hover { background: rgba(255, 255, 255, .03); }
+  .tape.steps li.done { color: var(--muted); }
+  .tape.steps li.ahead { color: var(--dim); }
+  .tape.steps li.here { background: var(--accent-soft); color: var(--text); }
+  .tape.steps li.here .at { color: var(--accent); }
+  .tape li .what { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tape.trades li.buy .what { color: var(--bid); }
+  .tape.trades li.sell .what { color: var(--ask); }
+
+  /* ---------- stats ---------- */
+
+  .stats { margin: 0; padding: 4px 0; }
+
+  .stats div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 5px 12px;
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+  }
+
+  .stats dt { color: var(--muted); font-family: var(--sans); font-size: 11.5px; }
+  .stats dd { margin: 0; }
+  .stats .buy dd { color: var(--bid); }
+  .stats .sell dd { color: var(--ask); }
+
+  .note { padding: 2px 12px 10px; color: var(--dim); font-size: 11px; line-height: 1.45; }
+
+  /* ---------- transport ---------- */
+
+  footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: rgba(12, 16, 23, .96);
+    border-top: 1px solid var(--line);
+    backdrop-filter: blur(6px);
+  }
+
+  .keys { display: flex; gap: 6px; }
+
+  button {
+    min-width: 34px;
+    height: 30px;
+    padding: 0 9px;
+    background: #161d29;
+    color: var(--text);
+    border: 1px solid var(--line);
+    border-radius: 2px;
+    font-family: var(--mono);
+    font-size: 12px;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) { background: #1d2634; border-color: #2b3648; }
+  button:disabled { color: var(--dim); cursor: default; }
+  button.play { min-width: 62px; color: var(--accent); }
+
+  input[type=range] {
+    flex: 1;
+    min-width: 90px;
+    accent-color: var(--accent);
+    background: transparent;
+  }
+
+  .count {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+
+  .count b { color: var(--text); font-weight: 500; }
+
+  @media (max-width: 620px) {
+    .head, .row { grid-template-columns: 76px 1fr 46px; }
+    .cum, .head .cum { display: none; }
+    .facts { margin-left: 0; }
+    footer { flex-wrap: wrap; }
+    .count { order: -1; width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="mark"><b>PriceTime</b> · replay</div>
+    <div class="symbol" id="symbol">—</div>
+  </div>
+  <div class="facts" id="facts"></div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Session <em id="stepCount"></em></h2>
+    <ol class="tape steps scroll" id="steps"></ol>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>Order book <em id="bookAt"></em></h2>
+      <div class="now">
+        <div class="seq" id="nowSeq"></div>
+        <div class="line" id="nowLine"></div>
+      </div>
+      <ul class="events" id="events"></ul>
+      <div class="ladder">
+        <div class="head">
+          <i style="text-align:left">Price</i><i>Quantity</i><i>Orders</i><i class="cum">Cumulative</i>
+        </div>
+        <div id="asks"></div>
+        <div class="spread" id="spread"></div>
+        <div id="bids"></div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="panel">
+      <h2>State</h2>
+      <dl class="stats" id="stats"></dl>
+    </div>
+    <div class="panel">
+      <h2>Market order reach</h2>
+      <dl class="stats" id="reach"></dl>
+      <p class="note" id="reachNote"></p>
+    </div>
+    <div class="panel">
+      <h2>Trades <em id="tradeCount"></em></h2>
+      <ol class="tape trades scroll" id="trades"></ol>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="keys">
+    <button id="first" title="First command (Home)">|&lt;</button>
+    <button id="prev" title="Previous command (left arrow)">&lt;</button>
+    <button id="play" class="play" title="Play or pause (space)">play</button>
+    <button id="next" title="Next command (right arrow)">&gt;</button>
+    <button id="last" title="Last command (End)">&gt;|</button>
+  </div>
+  <input type="range" id="scrub" min="0" value="0" step="1" aria-label="Position in the session">
+  <div class="count" id="count"></div>
+</footer>
+
+<noscript>
+  <p style="padding:16px">This page replays a recorded session, which needs JavaScript. The journal it
+  was built from is plain text and can be read without it.</p>
+</noscript>
+
+<script>
+"use strict";
+
+const DATA = JSON.parse("__PRICETIME_DATA__");
+const STEPS = DATA.steps;
+const DEPTH = 8;
+const INTERVAL = 850;
+
+/* Prices are whole ticks, so they are formatted with integer arithmetic: a
+   float would turn 1995 ticks of 0.05 into a price ending in noise. */
+const TICK = (function (size) {
+  const parts = String(size).split(".");
+  const places = parts.length > 1 ? parts[1].length : 0;
+  return { places: places, scaled: parseInt(parts.join(""), 10) };
+})(DATA.tickSize);
+
+const INDIAN = DATA.currency === "₹";
+
+function group(digits) {
+  if (digits.length <= 3) return digits;
+  const head = digits.slice(0, -3);
+  const tail = digits.slice(-3);
+  const every = INDIAN ? 2 : 3;
+  const parted = head.replace(new RegExp("\\B(?=(\\d{" + every + "})+(?!\\d))", "g"), ",");
+  return parted + "," + tail;
+}
+
+function money(ticks) {
+  if (ticks === null || ticks === undefined) return "—";
+  const minor = Math.abs(ticks * TICK.scaled).toString().padStart(TICK.places + 1, "0");
+  const cut = minor.length - TICK.places;
+  const whole = group(minor.slice(0, cut));
+  const rest = TICK.places ? "." + minor.slice(cut) : "";
+  return (ticks < 0 ? "-" : "") + whole + rest;
+}
+
+function priced(ticks) {
+  return ticks === null || ticks === undefined ? "—" : DATA.currency + money(ticks);
+}
+
+function quantity(size) {
+  return group(String(size));
+}
+
+function element(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+/* ---------- the parts of the page that never change ---------- */
+
+function fact(label, value) {
+  const node = element("div", "fact");
+  node.append(element("span", null, label), element("b", null, value));
+  return node;
+}
+
+function heading() {
+  document.getElementById("symbol").textContent = DATA.symbol;
+  document.title = "PriceTime — " + DATA.symbol;
+  const facts = document.getElementById("facts");
+  facts.append(fact("Tick", DATA.currency + DATA.tickSize));
+  if (DATA.priceBand) {
+    facts.append(fact("Price band",
+      priced(DATA.priceBand.lower) + " – " + priced(DATA.priceBand.upper)));
+  }
+  facts.append(fact("Protection",
+    (DATA.protection.bps / 100) + "%, min " + DATA.protection.minTicks + " ticks"));
+  facts.append(fact("Commands", String(STEPS.length)));
+}
+
+function session() {
+  const list = document.getElementById("steps");
+  STEPS.forEach(function (step, index) {
+    const row = element("li");
+    row.dataset.index = String(index);
+    row.append(element("b", "at num", String(step.sequence)));
+    const what = element("span", "what");
+    what.append(element("i", "chip k-" + step.action, step.action), step.summary);
+    row.append(what);
+    list.append(row);
+  });
+  list.addEventListener("click", function (event) {
+    const row = event.target.closest("li");
+    if (row) show(Number(row.dataset.index));
+  });
+  document.getElementById("stepCount").textContent = STEPS.length + " commands";
+}
+
+/* ---------- the ladder ---------- */
+
+function levels(side, rows) {
+  let running = 0;
+  return rows.map(function (row) {
+    running += row[1];
+    return { side: side, price: row[0], quantity: row[1], orders: row[2], cumulative: running };
+  });
+}
+
+function marker(previous, side) {
+  const before = new Map();
+  if (previous) {
+    previous[side].forEach(function (row) { before.set(row[0], row[1]); });
+  }
+  return function (level) {
+    if (!previous) return "";
+    const was = before.get(level.price);
+    if (was === undefined) return " up";
+    if (level.quantity > was) return " up";
+    if (level.quantity < was) return " down";
+    return "";
+  };
+}
+
+function ladderRow(level, widest, touch, hit, change) {
+  const row = element("div", "row " + level.side + change +
+    (touch ? " touch" : "") + (hit.has(level.price) ? " hit" : ""));
+  const bar = element("div", "bar");
+  bar.style.width = (widest ? Math.max(2, (level.quantity / widest) * 62) : 0) + "%";
+  row.append(bar);
+  row.append(
+    element("div", "price", money(level.price)),
+    element("div", "qty", quantity(level.quantity)),
+    element("div", "orders", String(level.orders)),
+    element("div", "cum", quantity(level.cumulative))
+  );
+  return row;
+}
+
+function hidden(count, where) {
+  const note = element("div", "more", count + " more level" + (count === 1 ? "" : "s") + " " + where);
+  return note;
+}
+
+function ladder(step, previous) {
+  const asks = levels("ask", step.asks);
+  const bids = levels("bid", step.bids);
+  const shownAsks = asks.slice(0, DEPTH);
+  const shownBids = bids.slice(0, DEPTH);
+  const widest = Math.max(1, ...shownAsks.concat(shownBids).map(function (l) { return l.quantity; }));
+  const hit = new Set(step.trades.map(function (trade) { return trade.price; }));
+  const askChange = marker(previous, "asks");
+  const bidChange = marker(previous, "bids");
+
+  const askBox = document.getElementById("asks");
+  const bidBox = document.getElementById("bids");
+  askBox.replaceChildren();
+  bidBox.replaceChildren();
+
+  if (asks.length > shownAsks.length) askBox.append(hidden(asks.length - shownAsks.length, "above"));
+  shownAsks.slice().reverse().forEach(function (level, index) {
+    askBox.append(ladderRow(level, widest, index === shownAsks.length - 1, hit, askChange(level)));
+  });
+  if (!asks.length) askBox.append(element("div", "empty", "no offers"));
+
+  shownBids.forEach(function (level, index) {
+    bidBox.append(ladderRow(level, widest, index === 0, hit, bidChange(level)));
+  });
+  if (!bids.length) bidBox.append(element("div", "empty", "no bids"));
+  if (bids.length > shownBids.length) bidBox.append(hidden(bids.length - shownBids.length, "below"));
+
+  return { bestAsk: asks.length ? asks[0] : null, bestBid: bids.length ? bids[0] : null };
+}
+
+function spread(step, touch) {
+  const box = document.getElementById("spread");
+  box.replaceChildren();
+
+  const last = element("div", "last");
+  last.append(element("span", null, "Last trade"), element("b", null, priced(step.lastTradePrice)));
+  box.append(last);
+
+  const gap = element("div");
+  if (touch.bestBid && touch.bestAsk) {
+    const ticks = touch.bestAsk.price - touch.bestBid.price;
+    gap.append(element("span", null, "Spread"),
+      element("b", null, money(ticks) + " (" + ticks + " tick" + (ticks === 1 ? "" : "s") + ")"));
+  } else {
+    gap.append(element("span", null, "Spread"), element("b", null, "one sided"));
+  }
+  box.append(gap);
+}
+
+/* ---------- the side panels ---------- */
+
+function stat(list, label, value, tone) {
+  const row = element("div", tone || null);
+  row.append(element("dt", null, label), element("dd", "num", value));
+  list.append(row);
+}
+
+function state(step, touch) {
+  const list = document.getElementById("stats");
+  list.replaceChildren();
+  stat(list, "Best bid", touch.bestBid ? priced(touch.bestBid.price) : "—", "buy");
+  stat(list, "Best offer", touch.bestAsk ? priced(touch.bestAsk.price) : "—", "sell");
+  stat(list, "Bid quantity", quantity(total(step.bids)), "buy");
+  stat(list, "Offer quantity", quantity(total(step.asks)), "sell");
+  stat(list, "Resting orders", String(orders(step.bids) + orders(step.asks)));
+  stat(list, "Levels", step.bids.length + " bid, " + step.asks.length + " offer");
+}
+
+function total(rows) {
+  return rows.reduce(function (sum, row) { return sum + row[1]; }, 0);
+}
+
+function orders(rows) {
+  return rows.reduce(function (sum, row) { return sum + row[2]; }, 0);
+}
+
+function reach(step) {
+  const list = document.getElementById("reach");
+  const note = document.getElementById("reachNote");
+  list.replaceChildren();
+  if (!step.reach) {
+    note.textContent = "Nothing has traded yet, so there is no last traded price to protect a " +
+      "market order against. Until there is one, market orders are rejected.";
+    return;
+  }
+  stat(list, "Market buy up to", priced(step.reach.buy), "sell");
+  stat(list, "Market sell down to", priced(step.reach.sell), "buy");
+  note.textContent = "A market order trades no further than " + (DATA.protection.bps / 100) +
+    "% from the last traded price of " + priced(step.lastTradePrice) +
+    ", and never less than " + DATA.protection.minTicks + " ticks. Whatever it cannot fill " +
+    "inside that band is cancelled, or rests as a limit order if the other side is empty.";
+}
+
+function trades(index) {
+  const list = document.getElementById("trades");
+  list.replaceChildren();
+  let count = 0;
+  for (let at = index; at >= 0; at--) {
+    STEPS[at].trades.slice().reverse().forEach(function (trade) {
+      count += 1;
+      const row = element("li", trade.aggressor);
+      row.append(element("b", "at num", String(STEPS[at].sequence)));
+      row.append(element("span", "what num",
+        quantity(trade.quantity) + " @ " + priced(trade.price) +
+        (trade.aggressor === "buy" ? "  taken" : "  hit")));
+      list.append(row);
+    });
+  }
+  document.getElementById("tradeCount").textContent = count ? count + " so far" : "";
+  if (!count) list.append(element("li", "empty", "nothing has traded yet"));
+}
+
+/* ---------- moving through the session ---------- */
+
+let at = 0;
+let timer = null;
+
+function show(index) {
+  at = Math.min(Math.max(index, 0), STEPS.length - 1);
+  const step = STEPS[at];
+  const previous = at > 0 ? STEPS[at - 1] : null;
+
+  document.getElementById("nowSeq").textContent = "Command " + step.sequence;
+  const line = document.getElementById("nowLine");
+  line.replaceChildren(element("i", "chip k-" + step.action, step.action));
+  line.append(step.summary);
+
+  const events = document.getElementById("events");
+  events.replaceChildren();
+  step.events.forEach(function (event) {
+    const row = element("li");
+    row.append(element("i", "chip k-" + event.kind, event.kind), event.text);
+    events.append(row);
+  });
+  if (!step.events.length) events.append(element("li", null, "nothing happened"));
+
+  const touch = ladder(step, previous);
+  spread(step, touch);
+  state(step, touch);
+  reach(step);
+  trades(at);
+
+  document.getElementById("bookAt").textContent = "after command " + step.sequence;
+  document.getElementById("count").innerHTML = "";
+  document.getElementById("count").append(
+    element("b", null, String(at + 1)), document.createTextNode(" of " + STEPS.length));
+  document.getElementById("scrub").value = String(at);
+  document.getElementById("first").disabled = at === 0;
+  document.getElementById("prev").disabled = at === 0;
+  document.getElementById("next").disabled = at === STEPS.length - 1;
+  document.getElementById("last").disabled = at === STEPS.length - 1;
+
+  const rows = document.getElementById("steps").children;
+  for (let index = 0; index < rows.length; index++) {
+    rows[index].className = index === at ? "here" : (index < at ? "done" : "ahead");
+  }
+  rows[at].scrollIntoView({ block: "nearest" });
+}
+
+function pause() {
+  if (timer !== null) clearInterval(timer);
+  timer = null;
+  document.getElementById("play").textContent = "play";
+}
+
+function play() {
+  if (timer !== null) return pause();
+  if (at === STEPS.length - 1) show(0);
+  document.getElementById("play").textContent = "pause";
+  timer = setInterval(function () {
+    if (at === STEPS.length - 1) return pause();
+    show(at + 1);
+  }, INTERVAL);
+}
+
+function step(by) {
+  pause();
+  show(at + by);
+}
+
+function controls() {
+  const scrub = document.getElementById("scrub");
+  scrub.max = String(STEPS.length - 1);
+  scrub.addEventListener("input", function () { pause(); show(Number(scrub.value)); });
+  document.getElementById("first").addEventListener("click", function () { step(-STEPS.length); });
+  document.getElementById("prev").addEventListener("click", function () { step(-1); });
+  document.getElementById("next").addEventListener("click", function () { step(1); });
+  document.getElementById("last").addEventListener("click", function () { step(STEPS.length); });
+  document.getElementById("play").addEventListener("click", play);
+
+  document.addEventListener("keydown", function (event) {
+    if (event.target.tagName === "INPUT" && event.key !== " ") return;
+    const moves = { ArrowLeft: -1, ArrowRight: 1, ArrowDown: 1, ArrowUp: -1 };
+    if (event.key in moves) { event.preventDefault(); step(moves[event.key]); }
+    else if (event.key === "Home") { event.preventDefault(); step(-STEPS.length); }
+    else if (event.key === "End") { event.preventDefault(); step(STEPS.length); }
+    else if (event.key === " ") { event.preventDefault(); play(); }
+  });
+}
+
+heading();
+session();
+controls();
+show(0);
+</script>
+</body>
+</html>

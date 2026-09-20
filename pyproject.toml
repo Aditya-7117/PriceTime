@@ -121,4 +121,5 @@ show_missing = true
 exclude_also = [
     "if TYPE_CHECKING:",
     "assert_never\\(",
+    'if __name__ == "__main__":',
 ]
